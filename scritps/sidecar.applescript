@@ -65,4 +65,7 @@ on run
     end tell
 
     tell application "System Settings" to quit
+
+    -- Log success message
+    log "✅ Sidecar successfully toggled for device: " & device
 end run
