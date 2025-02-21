@@ -23,13 +23,21 @@ is_valid_ticket_id() {
   [[ $1 =~ ^[A-Z]+-[0-9]+$ ]]
 }
 
-# Open Jira dashboard if no argument is provided
+# Check if a parameter was provided
 if [[ -z "$1" ]]; then
-  open "$BASEURL"
-  exit 0
+  # No parameter, check clipboard
+  clipboard_content=$(pbpaste | tr -d '[:space:]') # Remove leading/trailing spaces
+
+  if is_valid_ticket_id "$clipboard_content"; then
+    open "$BASEURL/browse/$clipboard_content"
+    exit 0
+  else
+    open "$BASEURL"
+    exit 0
+  fi
 fi
 
-# If argument is a valid Jira ticket ID, open it
+# If parameter is a valid Jira ticket ID, open it
 if is_valid_ticket_id "$1"; then
   open "$BASEURL/browse/$1"
 else
