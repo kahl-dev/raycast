@@ -20,7 +20,7 @@ BASEURL="https://louis-internet.atlassian.net"
 
 # Function to validate a Jira ticket ID (e.g., ABC-123)
 is_valid_ticket_id() {
-  [[ $1 =~ ^[A-Z]+-[0-9]+$ ]]
+  [[ $1 =~ ^[A-Za-z]+-[0-9]+$ ]]
 }
 
 # Check if a parameter was provided
