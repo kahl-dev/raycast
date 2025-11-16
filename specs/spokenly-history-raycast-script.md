@@ -64,13 +64,13 @@ User wants to access Spokenly speech-to-text transcription history from Raycast.
 - [x] Update specs/index.md with timestamp
 
 ### Phase 2: Enhancements (Optional)
-- [ ] Add search functionality via optional argument
-- [ ] Add date filtering (today, yesterday, last 7 days)
-- [ ] Show audio duration in output
-- [ ] Add option to export to file
-- [ ] **REVIEW GATE:** Manual testing + user approval
-- [ ] Commit after approval
-- [ ] Update specs/index.md with timestamp
+- [x] Add search functionality via optional argument
+- [x] Add date filtering (today, yesterday, last 7 days)
+- [x] Show audio duration in output
+- [x] Add option to export to file
+- [x] **REVIEW GATE:** Manual testing + user approval
+- [x] Commit after approval
+- [x] Update specs/index.md with timestamp
 
 ## Script Structure
 
@@ -149,6 +149,7 @@ fi
 ## Progress Log
 - [2025-11-16 16:35] Plan created
 - [2025-11-16 17:05] Phase 1 completed - Basic implementation with search functionality, all tests passing
+- [2025-11-16 17:10] Phase 2 completed - Added date filtering, audio duration display, and export to file functionality
 
 ## How to Implement
 

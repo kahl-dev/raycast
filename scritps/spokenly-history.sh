@@ -9,6 +9,7 @@
 # Optional parameters:
 # @raycast.icon 🎙️
 # @raycast.argument1 { "type": "text", "placeholder": "Search (optional)", "optional": true, "percentEncoded": false }
+# @raycast.argument2 { "type": "dropdown", "placeholder": "Filter", "optional": true, "data": [{"title": "All", "value": "all"}, {"title": "Today", "value": "today"}, {"title": "Yesterday", "value": "yesterday"}, {"title": "Last 7 days", "value": "week"}] }
 
 # Documentation:
 # @raycast.description Access Spokenly transcription history - view, search, and copy to clipboard
@@ -18,6 +19,7 @@
 # Constants
 HISTORY_DIR="$HOME/Library/Containers/app.spokenly/Data/Library/Application Support/Spokenly/History"
 SEARCH_QUERY="$1"
+DATE_FILTER="${2:-all}"
 
 # Check if jq is installed
 if ! command -v jq &> /dev/null; then
@@ -73,12 +75,55 @@ extract_timestamp() {
     fi
 }
 
+# Function to extract Unix timestamp for filtering
+extract_unix_timestamp() {
+    local file="$1"
+    local cf_timestamp
+    cf_timestamp=$(jq -r '.creationDate // empty' "$file" 2>/dev/null)
+
+    if [ -n "$cf_timestamp" ]; then
+        echo $((${cf_timestamp%.*} + 978307200))
+    else
+        echo "0"
+    fi
+}
+
+# Function to extract audio duration from JSON file
+extract_duration() {
+    local file="$1"
+    local duration
+    duration=$(jq -r '.content.dictation._0.success._0.result.audioFile.duration // empty' "$file" 2>/dev/null)
+
+    if [ -n "$duration" ]; then
+        # Convert seconds to mm:ss format
+        local minutes=$((${duration%.*} / 60))
+        local seconds=$((${duration%.*} % 60))
+        printf "%dm%02ds" "$minutes" "$seconds"
+    else
+        echo ""
+    fi
+}
+
+# Calculate date filter boundaries
+TODAY_START=$(date -j -f "%Y-%m-%d %H:%M:%S" "$(date +%Y-%m-%d) 00:00:00" +%s 2>/dev/null)
+YESTERDAY_START=$(date -j -v-1d -f "%Y-%m-%d %H:%M:%S" "$(date +%Y-%m-%d) 00:00:00" +%s 2>/dev/null)
+WEEK_START=$(date -j -v-7d +%s 2>/dev/null)
+
 # Build array of transcriptions
 declare -a transcriptions
 declare -a timestamps
 declare -a filepaths
+declare -a durations
 
+# Display header with filter info
 echo "🎙️  Spokenly Transcription History"
+if [ "$DATE_FILTER" != "all" ]; then
+    case "$DATE_FILTER" in
+        today) echo "    📅 Filter: Today" ;;
+        yesterday) echo "    📅 Filter: Yesterday" ;;
+        week) echo "    📅 Filter: Last 7 days" ;;
+    esac
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -92,6 +137,23 @@ for json_file in "${json_files[@]}"; do
         continue
     fi
 
+    # Apply date filter
+    if [ "$DATE_FILTER" != "all" ]; then
+        file_timestamp=$(extract_unix_timestamp "$json_file")
+
+        case "$DATE_FILTER" in
+            today)
+                [ "$file_timestamp" -lt "$TODAY_START" ] && continue
+                ;;
+            yesterday)
+                [ "$file_timestamp" -lt "$YESTERDAY_START" ] || [ "$file_timestamp" -ge "$TODAY_START" ] && continue
+                ;;
+            week)
+                [ "$file_timestamp" -lt "$WEEK_START" ] && continue
+                ;;
+        esac
+    fi
+
     # If search query provided, filter results
     if [ -n "$SEARCH_QUERY" ]; then
         if ! echo "$text" | grep -qi "$SEARCH_QUERY"; then
@@ -100,11 +162,13 @@ for json_file in "${json_files[@]}"; do
     fi
 
     timestamp=$(extract_timestamp "$json_file")
+    duration=$(extract_duration "$json_file")
 
     # Store for later
     transcriptions+=("$text")
     timestamps+=("$timestamp")
     filepaths+=("$json_file")
+    durations+=("$duration")
 
     count=$((count + 1))
 
@@ -114,8 +178,12 @@ for json_file in "${json_files[@]}"; do
         preview="${preview}..."
     fi
 
-    # Display entry
-    echo "[$count] $timestamp"
+    # Display entry with duration
+    if [ -n "$duration" ]; then
+        echo "[$count] $timestamp ⏱️  $duration"
+    else
+        echo "[$count] $timestamp"
+    fi
     echo "    $preview"
     echo ""
 
@@ -139,7 +207,7 @@ fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Enter number to copy to clipboard (or press Enter to exit):"
+echo "Enter number to copy (or 'e<number>' to export to file, Enter to exit):"
 read -r selection
 
 # Validate selection
@@ -148,9 +216,16 @@ if [ -z "$selection" ]; then
     exit 0
 fi
 
+# Check if export mode (e.g., "e1", "e5")
+export_mode=false
+if [[ "$selection" =~ ^e[0-9]+$ ]]; then
+    export_mode=true
+    selection="${selection#e}"  # Remove 'e' prefix
+fi
+
 # Check if selection is a valid number
 if ! [[ "$selection" =~ ^[0-9]+$ ]]; then
-    echo "❌ Invalid selection: must be a number"
+    echo "❌ Invalid selection: must be a number or 'e<number>'"
     exit 1
 fi
 
@@ -164,13 +239,37 @@ fi
 selected_index=$((selection - 1))
 selected_text="${transcriptions[$selected_index]}"
 selected_timestamp="${timestamps[$selected_index]}"
+selected_duration="${durations[$selected_index]}"
 
-# Copy to clipboard
-echo "$selected_text" | pbcopy
+if [ "$export_mode" = true ]; then
+    # Export to file
+    export_dir="$HOME/Desktop"
+    filename="spokenly-$(date +%Y%m%d-%H%M%S).txt"
+    filepath="$export_dir/$filename"
 
-# Confirmation
-echo ""
-echo "✅ Copied to clipboard!"
-echo ""
-echo "📅 $selected_timestamp"
-echo "📝 ${selected_text:0:150}$([ ${#selected_text} -gt 150 ] && echo '...')"
+    # Write to file with metadata
+    {
+        echo "Spokenly Transcription"
+        echo "Date: $selected_timestamp"
+        [ -n "$selected_duration" ] && echo "Duration: $selected_duration"
+        echo ""
+        echo "$selected_text"
+    } > "$filepath"
+
+    echo ""
+    echo "📁 Exported to file!"
+    echo ""
+    echo "📄 $filepath"
+    echo "📅 $selected_timestamp"
+    [ -n "$selected_duration" ] && echo "⏱️  $selected_duration"
+else
+    # Copy to clipboard
+    echo "$selected_text" | pbcopy
+
+    echo ""
+    echo "✅ Copied to clipboard!"
+    echo ""
+    echo "📅 $selected_timestamp"
+    [ -n "$selected_duration" ] && echo "⏱️  $selected_duration"
+    echo "📝 ${selected_text:0:150}$([ ${#selected_text} -gt 150 ] && echo '...')"
+fi

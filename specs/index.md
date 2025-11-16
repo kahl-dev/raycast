@@ -1,14 +1,14 @@
 # Plans Index
 
-Last updated: 2025-11-16 17:05
+Last updated: 2025-11-16 17:10
 
 ## Active Plans
 
-- **[Spokenly History Raycast Script](spokenly-history-raycast-script.md)** - Status: in-progress - Created: 2025-11-16 16:35 - Updated: 2025-11-16 17:05 - Phase: 1/2
+_(No active plans)_
 
 ## Completed Plans
 
-_(No completed plans yet)_
+- **[Spokenly History Raycast Script](spokenly-history-raycast-script.md)** - Status: completed - Created: 2025-11-16 16:35 - Completed: 2025-11-16 17:10 - Phases: 2/2
 
 ## Status Legend
 - **draft** - Plan created, not started
