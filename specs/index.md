@@ -1,10 +1,10 @@
 # Plans Index
 
-Last updated: 2025-11-16 17:10
+Last updated: 2025-11-16 18:45
 
 ## Active Plans
 
-_(No active plans)_
+- **[Spokenly Raycast Extension](spokenly-raycast-extension.md)** - Status: in-progress - Created: 2025-11-16 17:15 - Updated: 2025-11-16 18:45 - Phase: 1/2
 
 ## Completed Plans
 
