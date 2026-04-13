@@ -1,0 +1,41 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "audio-switcher",
+  "title": "Audio Switcher",
+  "description": "Switch macOS audio output devices with custom icons, priority management, and Bluetooth auto-connect",
+  "icon": "icon.png",
+  "author": "kahl.dev",
+  "license": "MIT",
+  "categories": ["System"],
+  "commands": [
+    {
+      "name": "switch-output",
+      "title": "Switch Audio Output",
+      "description": "List and switch between audio output devices",
+      "mode": "view"
+    },
+    {
+      "name": "toggle-mic-mute",
+      "title": "Toggle Mic Mute",
+      "description": "Toggle mute on the default input device (Wave:3)",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.92.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.6",
+    "@spotxyz/macos-audio-devices": "^1.5.0",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}
