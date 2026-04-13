@@ -28,7 +28,7 @@ export interface DeviceConfig {
   priority: number;
   icon: string;
   hidden: boolean;
-  bluetooth?: { mac: string };
+  bluetooth?: boolean | { mac: string };
 }
 
 export interface AudioManagerConfig {

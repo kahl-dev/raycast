@@ -14,7 +14,9 @@ import type { EnrichedDevice, TransportType, AudioManagerConfig } from "./types"
 
 const manager = new AudioDeviceManager(macOSPlatform);
 const bluetooth = new BluetoothManager(macOSBluetoothAdapter);
-const CONFIG_PATH = join(homedir(), ".config", "audio-manager", "config.json");
+const CONFIG_DIR = join(homedir(), ".config", "audio-manager");
+const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+const PRIVATE_PATH = join(CONFIG_DIR, "private.json");
 
 const TRANSPORT_LABELS: Record<TransportType, string> = {
   bluetooth: "Bluetooth",
@@ -54,10 +56,30 @@ function getDeviceIcon(device: EnrichedDevice, isActive: boolean): Image.ImageLi
   };
 }
 
+function readPrivateConfig(): Record<string, string> {
+  try {
+    const raw = readFileSync(PRIVATE_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    return parsed.bluetooth ?? {};
+  } catch {
+    return {};
+  }
+}
+
 function readConfig(): AudioManagerConfig {
   try {
     const raw = readFileSync(CONFIG_PATH, "utf-8");
-    return loadConfig(raw);
+    const config = loadConfig(raw);
+    const privateMacs = readPrivateConfig();
+
+    config.devices = config.devices.map((device) => {
+      if (device.bluetooth && privateMacs[device.name]) {
+        return { ...device, bluetooth: { mac: privateMacs[device.name] } };
+      }
+      return device;
+    });
+
+    return config;
   } catch {
     return loadConfig(null);
   }

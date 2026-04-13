@@ -16,8 +16,15 @@ function toEnrichedDevice(
     configured: deviceConfig !== undefined,
     hidden: deviceConfig?.hidden ?? false,
     icon: deviceConfig?.icon ?? "",
-    bluetoothMac: deviceConfig?.bluetooth?.mac ?? "",
+    bluetoothMac: extractMac(deviceConfig?.bluetooth),
   };
+}
+
+function extractMac(bluetooth: boolean | { mac: string } | undefined): string {
+  if (typeof bluetooth === "object" && bluetooth !== null) {
+    return bluetooth.mac;
+  }
+  return "";
 }
 
 function createDisconnectedDevice(deviceConfig: DeviceConfig): EnrichedDevice {
@@ -33,7 +40,7 @@ function createDisconnectedDevice(deviceConfig: DeviceConfig): EnrichedDevice {
     configured: true,
     hidden: deviceConfig.hidden,
     icon: deviceConfig.icon,
-    bluetoothMac: deviceConfig.bluetooth?.mac ?? "",
+    bluetoothMac: extractMac(deviceConfig.bluetooth),
   };
 }
 
