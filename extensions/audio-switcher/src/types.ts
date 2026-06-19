@@ -30,6 +30,9 @@ export interface DeviceConfig {
   priority: number;
   icon: string;
   hidden: boolean;
+  // Whether the Hammerspoon daemon may auto-select this device (default true). Decoupled from
+  // `hidden` (UI visibility): the Wave:3 mic stays manually selectable but never auto-picked.
+  autoEligible?: boolean;
   bluetooth?: boolean | { mac: string };
 }
 
