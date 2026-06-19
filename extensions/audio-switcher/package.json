@@ -15,9 +15,15 @@
       "mode": "view"
     },
     {
+      "name": "switch-input",
+      "title": "Switch Input Device",
+      "description": "List and switch between audio input devices",
+      "mode": "view"
+    },
+    {
       "name": "toggle-mic-mute",
       "title": "Toggle Mic Mute",
-      "description": "Toggle mute on the default input device (Wave:3)",
+      "description": "Toggle mute on the Wave:3 mic (falls back to the current input)",
       "mode": "no-view"
     }
   ],

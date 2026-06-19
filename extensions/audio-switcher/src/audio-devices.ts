@@ -17,4 +17,19 @@ export class AudioDeviceManager {
   async switchToDevice(deviceId: string): Promise<boolean> {
     return this.platform.setDefaultOutputDevice(deviceId);
   }
+
+  async getInputDevices(): Promise<AudioDevice[]> {
+    const allDevices = await this.platform.getAllDevices();
+    return allDevices
+      .filter((device) => device.isInput)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async getActiveInput(): Promise<AudioDevice | null> {
+    return this.platform.getDefaultInputDevice();
+  }
+
+  async switchToInput(deviceId: string): Promise<boolean> {
+    return this.platform.setDefaultInputDevice(deviceId);
+  }
 }

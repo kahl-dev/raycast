@@ -11,35 +11,14 @@ import { loadConfig } from "./config";
 import { updateDevicePriority, toggleDeviceHidden } from "./config-actions";
 import { enrichDevices } from "./enriched-devices";
 import { notePick } from "./util/hammerspoon";
-import type { EnrichedDevice, TransportType, AudioManagerConfig } from "./types";
+import { TRANSPORT_LABELS, TRANSPORT_ICONS } from "./transport";
+import type { EnrichedDevice, AudioManagerConfig } from "./types";
 
 const manager = new AudioDeviceManager(macOSPlatform);
 const bluetooth = new BluetoothManager(macOSBluetoothAdapter);
 const CONFIG_DIR = join(homedir(), ".config", "audio-manager");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const PRIVATE_PATH = join(CONFIG_DIR, "private.json");
-
-const TRANSPORT_LABELS: Record<TransportType, string> = {
-  bluetooth: "Bluetooth",
-  builtin: "Built-in",
-  usb: "USB",
-  displayport: "DisplayPort",
-  hdmi: "HDMI",
-  airplay: "AirPlay",
-  virtual: "Virtual",
-  unknown: "Unknown",
-};
-
-const TRANSPORT_ICONS: Record<TransportType, Icon> = {
-  bluetooth: Icon.Signal3,
-  builtin: Icon.Speaker,
-  usb: Icon.SpeakerHigh,
-  displayport: Icon.Monitor,
-  hdmi: Icon.Monitor,
-  airplay: Icon.Wifi,
-  virtual: Icon.Network,
-  unknown: Icon.QuestionMark,
-};
 
 function getDeviceIcon(device: EnrichedDevice, isActive: boolean): Image.ImageLike {
   if (device.icon) {

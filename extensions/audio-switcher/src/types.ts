@@ -20,6 +20,8 @@ export interface AudioPlatform {
   getAllDevices(): Promise<AudioDevice[]>;
   getDefaultOutputDevice(): Promise<AudioDevice | null>;
   setDefaultOutputDevice(deviceId: string): Promise<boolean>;
+  getDefaultInputDevice(): Promise<AudioDevice | null>;
+  setDefaultInputDevice(deviceId: string): Promise<boolean>;
 }
 
 export interface DeviceConfig {

@@ -2,12 +2,20 @@ import { describe, it, expect } from "vitest";
 import { AudioDeviceManager } from "./audio-devices";
 import type { AudioDevice, AudioPlatform } from "./types";
 
-function createFakePlatform(devices: AudioDevice[], defaultOutputId?: string): AudioPlatform {
+function createFakePlatform(
+  devices: AudioDevice[],
+  defaultOutputId?: string,
+  defaultInputId?: string,
+): AudioPlatform {
   return {
     getAllDevices: async () => devices,
     getDefaultOutputDevice: async () =>
       devices.find((device) => device.id === defaultOutputId) ?? null,
     setDefaultOutputDevice: async (deviceId: string) =>
+      devices.some((device) => device.id === deviceId),
+    getDefaultInputDevice: async () =>
+      devices.find((device) => device.id === defaultInputId) ?? null,
+    setDefaultInputDevice: async (deviceId: string) =>
       devices.some((device) => device.id === deviceId),
   };
 }
@@ -99,6 +107,42 @@ describe("AudioDeviceManager", () => {
         "Wave:3": "usb",
         "WH-1000XM6": "bluetooth",
       });
+    });
+  });
+
+  describe("getInputDevices", () => {
+    it("returns only input-capable devices, sorted by name", async () => {
+      const manager = new AudioDeviceManager(createFakePlatform(fakeDevices));
+
+      const inputs = await manager.getInputDevices();
+
+      expect(inputs.map((device) => device.name)).to.deep.equal([
+        "MacBook Pro Microphone",
+        "Wave:3",
+        "WH-1000XM6",
+      ]);
+    });
+  });
+
+  describe("getActiveInput", () => {
+    it("returns the current default input device", async () => {
+      const manager = new AudioDeviceManager(createFakePlatform(fakeDevices, undefined, "3"));
+
+      expect((await manager.getActiveInput())?.name).to.equal("Wave:3");
+    });
+  });
+
+  describe("switchToInput", () => {
+    it("switches to a known input and returns true", async () => {
+      const manager = new AudioDeviceManager(createFakePlatform(fakeDevices));
+
+      expect(await manager.switchToInput("3")).to.equal(true);
+    });
+
+    it("returns false for an unknown input id", async () => {
+      const manager = new AudioDeviceManager(createFakePlatform(fakeDevices));
+
+      expect(await manager.switchToInput("999")).to.equal(false);
     });
   });
 });

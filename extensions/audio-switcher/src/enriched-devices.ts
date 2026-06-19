@@ -1,6 +1,6 @@
 import type { AudioDevice, AudioManagerConfig, DeviceConfig, EnrichedDevice } from "./types";
 
-function findConfig(device: AudioDevice, configs: DeviceConfig[]): DeviceConfig | undefined {
+export function findConfig(device: AudioDevice, configs: DeviceConfig[]): DeviceConfig | undefined {
   return configs.find((config) => device.name.includes(config.name));
 }
 
