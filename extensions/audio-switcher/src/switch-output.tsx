@@ -10,6 +10,7 @@ import { macOSBluetoothAdapter } from "./bluetooth-macos";
 import { loadConfig } from "./config";
 import { updateDevicePriority, toggleDeviceHidden } from "./config-actions";
 import { enrichDevices } from "./enriched-devices";
+import { notePick } from "./util/hammerspoon";
 import type { EnrichedDevice, TransportType, AudioManagerConfig } from "./types";
 
 const manager = new AudioDeviceManager(macOSPlatform);
@@ -93,9 +94,18 @@ function saveConfig(updated: AudioManagerConfig): void {
   }
 }
 
-async function applySwitch(deviceId: string, label: string, stayOpen: boolean): Promise<boolean> {
+async function applySwitch(
+  deviceId: string,
+  deviceName: string,
+  label: string,
+  stayOpen: boolean,
+): Promise<boolean> {
   const success = await manager.switchToDevice(deviceId);
   if (success) {
+    // Record intent only AFTER a confirmed switch, so a failed switch leaves no sacred-pick
+    // residue in the daemon (which would otherwise "restore" onto a device the user was told
+    // failed). The daemon's evaluation is debounced (>=0.5s), so this still lands before it runs.
+    await notePick("output", deviceName);
     await showToast({ style: Toast.Style.Success, title: label });
     if (!stayOpen) {
       popToRoot();
@@ -150,7 +160,7 @@ export default function SwitchOutput() {
         const freshDevices = await loadDevices();
         const refreshedDevice = freshDevices.find((d) => d.name === device.name);
         if (refreshedDevice?.id) {
-          await applySwitch(refreshedDevice.id, device.label, stayOpen);
+          await applySwitch(refreshedDevice.id, refreshedDevice.name, device.label, stayOpen);
         } else {
           await showToast({ style: Toast.Style.Failure, title: `Device not found after connect: ${device.label}` });
         }
@@ -162,7 +172,7 @@ export default function SwitchOutput() {
         return;
       }
 
-      const switched = await applySwitch(device.id, device.label, stayOpen);
+      const switched = await applySwitch(device.id, device.name, device.label, stayOpen);
       if (switched && stayOpen) {
         await loadDevices();
       }
