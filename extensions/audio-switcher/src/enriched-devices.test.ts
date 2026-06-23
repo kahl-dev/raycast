@@ -121,4 +121,24 @@ describe("enrichDevices", () => {
     const names = unconfigured.map((device) => device.name);
     expect(names).to.deep.equal(["LG Ultra HD", "Microsoft Teams Audio"]);
   });
+
+  it("extracts the bluetooth MAC for a device configured with one", () => {
+    const btConfig: AudioManagerConfig = {
+      ...config,
+      devices: config.devices.map((d) =>
+        d.name === "WH-1000XM6" ? { ...d, bluetooth: { mac: "aa-bb-cc-dd-ee-ff" } } : d,
+      ),
+    };
+    const result = enrichDevices(platformDevices, btConfig, false);
+
+    const sony = result.find((device) => device.name === "WH-1000XM6");
+    expect(sony?.bluetoothMac).to.equal("aa-bb-cc-dd-ee-ff");
+  });
+
+  it("leaves bluetoothMac empty for a device without a bluetooth field", () => {
+    const result = enrichDevices(platformDevices, config, false);
+
+    const edifier = result.find((device) => device.name === "EDIFIER M60");
+    expect(edifier?.bluetoothMac).to.equal("");
+  });
 });

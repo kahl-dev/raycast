@@ -20,11 +20,8 @@ function toEnrichedDevice(
   };
 }
 
-function extractMac(bluetooth: boolean | { mac: string } | undefined): string {
-  if (typeof bluetooth === "object" && bluetooth !== null) {
-    return bluetooth.mac;
-  }
-  return "";
+function extractMac(bluetooth: { mac: string } | undefined): string {
+  return bluetooth?.mac ?? "";
 }
 
 function createDisconnectedDevice(deviceConfig: DeviceConfig): EnrichedDevice {
