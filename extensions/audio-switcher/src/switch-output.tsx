@@ -11,6 +11,7 @@ import { loadConfig } from "./config";
 import { updateDevicePriority, toggleDeviceHidden } from "./config-actions";
 import { enrichDevices } from "./enriched-devices";
 import { notePick } from "./util/hammerspoon";
+import { useAutomationPaused, pausedNavigationTitle } from "./automation-status";
 import { TRANSPORT_LABELS, TRANSPORT_ICONS } from "./transport";
 import type { EnrichedDevice, AudioManagerConfig } from "./types";
 
@@ -100,6 +101,7 @@ export default function SwitchOutput() {
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [config, setConfig] = useState<AudioManagerConfig>(readConfig);
+  const paused = useAutomationPaused();
 
   const loadDevices = useCallback(async (): Promise<EnrichedDevice[]> => {
     const [platformDevices, active] = await Promise.all([
@@ -223,7 +225,10 @@ export default function SwitchOutput() {
   }, [config, applyConfigUpdate]);
 
   return (
-    <List isLoading={isLoading} searchBarPlaceholder="Search audio devices...">
+    <List isLoading={isLoading}
+      searchBarPlaceholder="Search audio devices..."
+      navigationTitle={pausedNavigationTitle("Switch Audio Output", paused)}
+    >
       {devices.map((device) => {
         const isActive = device.id === activeDeviceId;
         const hasBluetooth = Boolean(device.bluetoothMac);

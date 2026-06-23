@@ -6,7 +6,7 @@ vi.mock("child_process", () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { notePick, clearPick, toggleInputMute } from "./hammerspoon";
+import { notePick, clearPick, toggleInputMute, toggleAutomation, isAutomationPaused } from "./hammerspoon";
 
 type Cb = (err: Error | null, value?: { stdout: string; stderr: string }) => void;
 
@@ -105,5 +105,43 @@ describe("toggleInputMute", () => {
   it("returns null (caller falls back) when hs is absent", async () => {
     rejectWith("spawn hs ENOENT");
     expect(await toggleInputMute()).to.equal(null);
+  });
+});
+
+describe("toggleAutomation", () => {
+  it("returns PAUSED when the daemon reports paused", async () => {
+    resolveWith("PAUSED");
+    expect(await toggleAutomation()).to.equal("PAUSED");
+    const lua = lastLua();
+    expect(lua).to.contain("togglePause");
+    expect(lua).to.contain("pcall(require, 'modules.audio-manager')");
+  });
+
+  it("returns ACTIVE when the daemon reports active", async () => {
+    resolveWith("ACTIVE");
+    expect(await toggleAutomation()).to.equal("ACTIVE");
+  });
+
+  it("returns null when the daemon is absent", async () => {
+    rejectWith("spawn hs ENOENT");
+    expect(await toggleAutomation()).to.equal(null);
+  });
+});
+
+describe("isAutomationPaused", () => {
+  it("is true when the daemon reports true", async () => {
+    resolveWith("true");
+    expect(await isAutomationPaused()).to.equal(true);
+    expect(lastLua()).to.contain("isPaused");
+  });
+
+  it("is false when the daemon reports false", async () => {
+    resolveWith("false");
+    expect(await isAutomationPaused()).to.equal(false);
+  });
+
+  it("is false (no automation to pause) when the daemon is absent", async () => {
+    rejectWith("spawn hs ENOENT");
+    expect(await isAutomationPaused()).to.equal(false);
   });
 });

@@ -7,6 +7,7 @@ import { AudioDeviceManager } from "./audio-devices";
 import { macOSPlatform } from "./platform-macos";
 import { loadConfig } from "./config";
 import { notePick, clearPick } from "./util/hammerspoon";
+import { useAutomationPaused, pausedNavigationTitle } from "./automation-status";
 import { findConfig } from "./enriched-devices";
 import { TRANSPORT_LABELS } from "./transport";
 import type { AudioDevice, AudioManagerConfig } from "./types";
@@ -51,6 +52,7 @@ export default function SwitchInput() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [config] = useState<AudioManagerConfig>(loadDeviceConfig);
+  const paused = useAutomationPaused();
 
   const loadDevices = useCallback(async () => {
     try {
@@ -72,7 +74,10 @@ export default function SwitchInput() {
   }, [loadDevices]);
 
   return (
-    <List isLoading={isLoading} searchBarPlaceholder="Search input devices...">
+    <List isLoading={isLoading}
+      searchBarPlaceholder="Search input devices..."
+      navigationTitle={pausedNavigationTitle("Switch Input Device", paused)}
+    >
       {devices.map((device) => {
         const isActive = device.id === activeId;
         const label = labelFor(device, config);

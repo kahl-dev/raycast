@@ -71,3 +71,24 @@ export async function toggleInputMute(): Promise<boolean | null> {
   if (result === "ON") return false;
   return null;
 }
+
+/**
+ * Toggle the daemon's automatic audio arbitration (pause/resume). Returns the new state, or null
+ * when the daemon is unavailable (undocked — there is no automation running to toggle anyway).
+ */
+export async function toggleAutomation(): Promise<"PAUSED" | "ACTIVE" | null> {
+  const lua = REQUIRE_DAEMON + "if ok and m.togglePause then return m.togglePause() end; return nil";
+  const result = await runHs(lua);
+  if (result === "PAUSED") return "PAUSED";
+  if (result === "ACTIVE") return "ACTIVE";
+  return null;
+}
+
+/**
+ * Whether the daemon's audio automation is currently paused. Best-effort: when the daemon is
+ * unavailable (undocked) there is no active automation, so report not-paused.
+ */
+export async function isAutomationPaused(): Promise<boolean> {
+  const lua = REQUIRE_DAEMON + "if ok and m.isPaused then return m.isPaused() end; return false";
+  return (await runHs(lua)) === "true";
+}

@@ -25,6 +25,12 @@
       "title": "Toggle Mic Mute",
       "description": "Toggle mute on the Wave:3 mic (falls back to the current input)",
       "mode": "no-view"
+    },
+    {
+      "name": "toggle-automation",
+      "title": "Toggle Audio Automation",
+      "description": "Pause or resume the audio daemon's automatic switching",
+      "mode": "no-view"
     }
   ],
   "dependencies": {
