@@ -84,7 +84,9 @@ export function highestDisplaySeverity(bucketSeverities: BucketSeverity[]): Seve
   return worst;
 }
 
-function highestPercentBucket(buckets: Bucket[]): Bucket | null {
+// Exported for reuse by pill-selection.ts (the fable pill's "highest weekly_scoped bucket" rule
+// is the same reduction, just applied to a pre-filtered subset).
+export function highestPercentBucket(buckets: Bucket[]): Bucket | null {
   if (buckets.length === 0) {
     return null;
   }
@@ -111,16 +113,27 @@ function titleSlot(bucket: Bucket | null): string | null {
   return `${titleLetterFor(bucket)}${Math.round(bucket.percent)}`;
 }
 
-function findSessionBucket(buckets: Bucket[]): Bucket | null {
-  return buckets.find((bucket) => bucket.id === "anthropic:session") ?? null;
+function findBucketById(buckets: Bucket[], id: string): Bucket | null {
+  return buckets.find((bucket) => bucket.id === id) ?? null;
 }
 
-function findWeeklyAllBucket(buckets: Bucket[]): Bucket | null {
-  return buckets.find((bucket) => bucket.id === "anthropic:weekly_all") ?? null;
+// Exported for reuse by pill-selection.ts (each pill kind other than "fable" is exactly one of
+// these fixed-id lookups) and dropdown.tsx (the OpenAI reset-credits row needs the primary bucket
+// specifically).
+export function findSessionBucket(buckets: Bucket[]): Bucket | null {
+  return findBucketById(buckets, "anthropic:session");
 }
 
-function findHighestWeeklyScopedBucket(buckets: Bucket[]): Bucket | null {
+export function findWeeklyAllBucket(buckets: Bucket[]): Bucket | null {
+  return findBucketById(buckets, "anthropic:weekly_all");
+}
+
+export function findHighestWeeklyScopedBucket(buckets: Bucket[]): Bucket | null {
   return highestPercentBucket(buckets.filter((bucket) => bucket.id.startsWith("anthropic:weekly_scoped:")));
+}
+
+export function findPrimaryOpenAiBucket(buckets: Bucket[]): Bucket | null {
+  return findBucketById(buckets, "openai:primary");
 }
 
 function findHighestOpenAiBucket(buckets: Bucket[]): Bucket | null {

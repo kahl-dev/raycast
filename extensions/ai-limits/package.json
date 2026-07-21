@@ -14,6 +14,35 @@
       "description": "Claude- und Codex-Nutzungslimits live in der Menubar",
       "mode": "menu-bar",
       "interval": "5m"
+    },
+    {
+      "name": "pill-claude-week",
+      "title": "Claude Woche Pill",
+      "description": "Claude-Wochenlimit als Pill-Icon in der Menubar",
+      "mode": "menu-bar",
+      "interval": "5m"
+    },
+    {
+      "name": "pill-fable",
+      "title": "Fable Pill",
+      "description": "Höchstes Fable-Wochenlimit als Pill-Icon in der Menubar",
+      "mode": "menu-bar",
+      "interval": "5m"
+    },
+    {
+      "name": "pill-openai",
+      "title": "OpenAI Pill",
+      "description": "OpenAI-Nutzungslimit als Pill-Icon in der Menubar",
+      "mode": "menu-bar",
+      "interval": "5m"
+    },
+    {
+      "name": "pill-session",
+      "title": "Claude Session Pill",
+      "description": "Claude-Session-Limit als Pill-Icon in der Menubar",
+      "mode": "menu-bar",
+      "interval": "5m",
+      "disabledByDefault": true
     }
   ],
   "dependencies": {

@@ -1,30 +1,14 @@
-import { Color, Icon, MenuBarExtra } from "@raycast/api";
+import { Icon, launchCommand, LaunchType, MenuBarExtra } from "@raycast/api";
 import { useCachedPromise } from "@raycast/utils";
 import { useState } from "react";
+import { DropdownContent, severityColor } from "./dropdown";
 import * as cache from "./lib/cache";
-import { readCodexAuth, runCodexLoginStatus, shouldShowRedeemHint } from "./lib/codex";
-import {
-  buildMenuBarTitle,
-  computeBucketSeverities,
-  formatResetGerman,
-  formatTimeShort,
-  formatWeekdayAndTime,
-  highestDisplaySeverity,
-  TITLE_LAYOUTS,
-  TitleLayout,
-} from "./lib/format";
+import { readCodexAuth, runCodexLoginStatus } from "./lib/codex";
+import { buildMenuBarTitle, computeBucketSeverities, highestDisplaySeverity, TitleLayout } from "./lib/format";
 import { readAnthropicToken } from "./lib/keychain";
 import { LoadDependencies, loadUsageData, staleSuffix } from "./lib/load";
 import { sendMacNotification } from "./lib/notify";
-import { projectLimitHit } from "./lib/projection";
-import { Bucket, Severity } from "./lib/types";
-
-const LAYOUT_LABELS: Record<TitleLayout, string> = {
-  weekly: "Woche (Standard)",
-  all: "Alle Werte",
-  max: "Nur höchster Wert",
-  icon: "Nur Icon",
-};
+import { PILL_COMMAND_KINDS, pillCommandName } from "./lib/pill-selection";
 
 const loadDependencies: LoadDependencies = {
   now: () => new Date(),
@@ -49,34 +33,9 @@ const loadDependencies: LoadDependencies = {
   notify: sendMacNotification,
 };
 
-function severityColor(severity: Severity): Color {
-  if (severity === "critical") {
-    return Color.Red;
-  }
-  if (severity === "warning") {
-    return Color.Orange;
-  }
-  return Color.Green;
-}
-
-function BucketRow({ bucket, severity, now }: { bucket: Bucket; severity: Severity; now: Date }) {
-  const history = cache.getBucketHistory(bucket.id);
-  const projectedLimitHitAt = projectLimitHit(history, bucket.resetsAt, now);
-  const projectionSuffix =
-    projectedLimitHitAt === null ? "" : ` · Limit ~${formatWeekdayAndTime(projectedLimitHitAt, now)}`;
-
-  return (
-    <MenuBarExtra.Item
-      title={`${bucket.label}: ${Math.round(bucket.percent)}%`}
-      subtitle={`Reset ${formatResetGerman(bucket.resetsAt, now)}${projectionSuffix}`}
-      icon={{ source: Icon.Circle, tintColor: severityColor(severity) }}
-    />
-  );
-}
-
 export default function MenuBar() {
   const [layout, setLayoutState] = useState<TitleLayout>(() => cache.getLayout());
-  const { data, isLoading, revalidate } = useCachedPromise(() => loadUsageData(loadDependencies), []);
+  const { data, isLoading, mutate } = useCachedPromise(() => loadUsageData(loadDependencies), []);
 
   const now = new Date();
   const allBuckets = data ? [...data.anthropicBuckets, ...data.codexBuckets] : [];
@@ -88,68 +47,50 @@ export default function MenuBar() {
   const codexSeverities = data ? computeBucketSeverities(data.codexBuckets, now) : [];
   const tintColor = severityColor(highestDisplaySeverity([...anthropicSeverities, ...codexSeverities]));
 
-  const primaryCodexBucket = data?.codexBuckets.find((bucket) => bucket.id === "openai:primary") ?? null;
-  const showResetCredits =
-    data !== undefined && data.codexResetCreditsAvailable !== null && data.codexResetCreditsAvailable > 0;
-
   function selectLayout(next: TitleLayout) {
     setLayoutState(next);
     cache.setLayout(next);
   }
 
+  // revalidate() (useCachedPromise) returns void, giving no signal for "the fetch has finished
+  // and Cache now holds fresh buckets" — mutate() wraps the same loadUsageData call in a promise
+  // we can await, so the pill fan-out below only launches once Cache is actually up to date
+  // (loadUsageData writes setLastGoodBuckets synchronously before its promise resolves).
+  // shouldRevalidateAfter is disabled: in a menu-bar command, mutate()'s default behavior awaits
+  // a *second* revalidate() (calling loadUsageData again) after the passed promise settles — that
+  // would fetch Codex's uncooled-down endpoint twice and record a duplicate history point for no
+  // benefit, since the awaited call below already wrote fresh buckets to Cache.
+  async function refreshAndNotifyPills() {
+    await mutate(loadUsageData(loadDependencies), { shouldRevalidateAfter: false });
+    await Promise.all(
+      PILL_COMMAND_KINDS.map(async (kind) => {
+        const commandName = pillCommandName(kind);
+        try {
+          await launchCommand({ name: commandName, type: LaunchType.Background });
+        } catch (error) {
+          // A pill command the user disabled (e.g. the session pill, disabledByDefault) makes
+          // launchCommand throw — that must not abort refreshing the other pills or surface an
+          // error for what is, from the user's perspective, an intentional configuration.
+          console.error(`AI Limits: Pill-Befehl "${commandName}" konnte nicht aktualisiert werden`, error);
+        }
+      }),
+    );
+  }
+
   return (
     <MenuBarExtra icon={{ source: Icon.Gauge, tintColor }} title={title} isLoading={isLoading} tooltip="AI Limits">
       {data && (
-        <>
-          <MenuBarExtra.Section title="Claude">
-            {data.anthropicBuckets.length === 0 ? (
-              <MenuBarExtra.Item title="Keine Daten (Keychain-Token fehlt?)" icon={Icon.Warning} />
-            ) : (
-              anthropicSeverities.map(({ bucket, severity }) => (
-                <BucketRow key={bucket.id} bucket={bucket} severity={severity} now={now} />
-              ))
-            )}
-          </MenuBarExtra.Section>
-
-          <MenuBarExtra.Section title="OpenAI">
-            {data.codexHint && <MenuBarExtra.Item title={data.codexHint} icon={Icon.Warning} />}
-            {data.codexBuckets.length === 0 && !data.codexHint ? (
-              <MenuBarExtra.Item title="Keine Daten (Codex-Login fehlt?)" icon={Icon.Warning} />
-            ) : (
-              codexSeverities.map(({ bucket, severity }) => (
-                <BucketRow key={bucket.id} bucket={bucket} severity={severity} now={now} />
-              ))
-            )}
-            {showResetCredits && (
-              <MenuBarExtra.Item
-                title={`Reset-Credits: ${data.codexResetCreditsAvailable} verfügbar`}
-                icon={Icon.Coins}
-                subtitle={shouldShowRedeemHint(primaryCodexBucket) ? "Einlösen: codex → /usage" : undefined}
-              />
-            )}
-          </MenuBarExtra.Section>
-
-          <MenuBarExtra.Section title="Layout">
-            {TITLE_LAYOUTS.map((option) => (
-              <MenuBarExtra.Item
-                key={option}
-                title={LAYOUT_LABELS[option]}
-                icon={option === layout ? Icon.Checkmark : undefined}
-                onAction={() => selectLayout(option)}
-              />
-            ))}
-          </MenuBarExtra.Section>
-
-          <MenuBarExtra.Section>
-            <MenuBarExtra.Item
-              title="Aktualisieren"
-              icon={Icon.ArrowClockwise}
-              onAction={() => revalidate()}
-              shortcut={{ modifiers: ["cmd"], key: "r" }}
-            />
-            <MenuBarExtra.Item title={`Aktualisiert ${formatTimeShort(data.lastUpdatedAt)}${staleSuffix(data)}`} />
-          </MenuBarExtra.Section>
-        </>
+        <DropdownContent
+          anthropicBuckets={data.anthropicBuckets}
+          codexBuckets={data.codexBuckets}
+          codexHint={data.codexHint}
+          codexResetCreditsAvailable={data.codexResetCreditsAvailable}
+          lastUpdatedAt={data.lastUpdatedAt}
+          staleSuffixText={staleSuffix(data)}
+          now={now}
+          onRefresh={refreshAndNotifyPills}
+          layoutSection={{ layout, onSelectLayout: selectLayout }}
+        />
       )}
     </MenuBarExtra>
   );

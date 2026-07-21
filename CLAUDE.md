@@ -52,7 +52,7 @@ months-stale 2-of-4-command build while all tests were green (found in the 2026-
 
 ### AI Limits Extension
 
-Located in `extensions/ai-limits/`. Menu-bar command (`interval: 5m`), npm + Vitest.
+Located in `extensions/ai-limits/`. Five menu-bar commands (`interval: 5m`), npm + Vitest: the main `menu-bar` command is the ONLY data owner (fetches, alerts, history); the four pill commands (`pill-claude-week`, `pill-fable`, `pill-openai`, `pill-session` — the latter `disabledByDefault`) are pure cache readers rendering runtime-generated PNG gauges (zero-dependency encoder in `src/lib/pill.ts`, content-addressed files in `environment.supportPath/pills/`, tunable colors in `PILL_STYLE`, 3x5 pixel font in `src/lib/pixel-font.ts`). Never add fetching to a pill command — the single-owner split is what keeps API pressure at 1 request per 5 minutes.
 
 ```bash
 cd extensions/ai-limits

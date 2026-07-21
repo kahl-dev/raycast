@@ -28,7 +28,7 @@ describe("sendMacNotification", () => {
   it("invokes osascript with an escaped display notification script", async () => {
     const execFile = fakeExecFile();
 
-    await sendMacNotification("AI Limits", 'Fable-Limit bei 82% — Reset Mo 22:00', execFile);
+    await sendMacNotification("AI Limits", "Fable-Limit bei 82% — Reset Mo 22:00", execFile);
 
     expect(execFile).toHaveBeenCalledTimes(1);
     const [file, args] = execFile.mock.calls[0];
