@@ -19,10 +19,14 @@ import { Bucket, FetchFunction, Provider } from "./types";
 export interface LoadCacheDependencies {
   getLastAnthropicAttemptAt: () => Date | null;
   setLastAnthropicAttemptAt: (date: Date) => void;
+  getLastCodexAttemptAt: () => Date | null;
+  setLastCodexAttemptAt: (date: Date) => void;
   getLastCodexLoginAttemptAt: () => Date | null;
   setLastCodexLoginAttemptAt: (date: Date) => void;
   getLastGoodBuckets: (provider: Provider) => Bucket[] | null;
   setLastGoodBuckets: (provider: Provider, buckets: Bucket[]) => void;
+  getLastCodexResetCreditsAvailable: () => number | null;
+  setLastCodexResetCreditsAvailable: (value: number | null) => void;
   getFiredAlertKeys: () => Set<string>;
   setFiredAlertKeys: (keys: Set<string>) => void;
   getLastUpdatedAt: () => Date | null;
@@ -71,9 +75,10 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   const previousAnthropicBuckets = deps.cache.getLastGoodBuckets("anthropic");
   const previousCodexBuckets = deps.cache.getLastGoodBuckets("openai");
 
-  // Anthropic and Codex are independent APIs with independent cooldown gates (60s / 1h) that
-  // both key off this same `now` — running them concurrently halves wall-clock latency without
-  // affecting either gate's timestamp math.
+  // Anthropic and Codex are independent APIs with independent cooldown gates that both key off
+  // this same `now` — Anthropic's 60s fetch cooldown, Codex's mirrored 60s fetch cooldown, plus
+  // Codex's separate 1h login-retry debounce — running them concurrently halves wall-clock latency
+  // without affecting any gate's timestamp math.
   const [anthropicResult, codexResult] = await Promise.all([
     loadAnthropicBuckets({
       now: () => now,
@@ -84,6 +89,7 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
     }),
     loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: deps.cache.getLastCodexAttemptAt(),
       lastLoginAttemptAt: deps.cache.getLastCodexLoginAttemptAt(),
       lastGoodBuckets: previousCodexBuckets,
       readAuth: () => deps.readAuth(),
@@ -99,9 +105,9 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
     console.error("AI Limits: Anthropic-Fetch fehlgeschlagen", anthropicResult.error);
   }
   const anthropicBuckets = anthropicResult.buckets ?? [];
-  // Guarded on `attempted` (unlike the Codex block below): a cooldown-skipped call also reports
-  // error:null while merely forwarding the possibly-null cached value — writing that back would
-  // overwrite a genuine "never fetched yet" (null) cache entry with an empty array.
+  // Guarded on `attempted` (mirrored by the Codex block below): a cooldown-skipped call also
+  // reports error:null while merely forwarding the possibly-null cached value — writing that back
+  // would overwrite a genuine "never fetched yet" (null) cache entry with an empty array.
   if (anthropicResult.attempted && anthropicResult.error === null) {
     deps.cache.setLastGoodBuckets("anthropic", anthropicBuckets);
     recordHistory(deps.cache, anthropicBuckets, now);
@@ -110,14 +116,31 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   if (codexResult.loginAttempted) {
     deps.cache.setLastCodexLoginAttemptAt(now);
   }
+  if (codexResult.attempted) {
+    deps.cache.setLastCodexAttemptAt(now);
+  }
   if (codexResult.error) {
     console.error("AI Limits: Codex-Fetch fehlgeschlagen", codexResult.error);
   }
   const codexBuckets = codexResult.buckets ?? [];
-  if (codexResult.error === null) {
+  // Guarded on `attempted` (mirrors the Anthropic block above): now that Codex also has a 60s
+  // cooldown gate (codex.ts), a cooldown-skipped call reports error:null while merely forwarding
+  // the possibly-null cached value — writing that back would overwrite a genuine "never fetched
+  // yet" (null) cache entry with an empty array. This write was previously unguarded because every
+  // call attempted the network; the new skip path makes the guard necessary, same as Anthropic.
+  const isFreshCodexSuccess = codexResult.attempted && codexResult.error === null;
+  if (isFreshCodexSuccess) {
     deps.cache.setLastGoodBuckets("openai", codexBuckets);
     recordHistory(deps.cache, codexBuckets, now);
+    deps.cache.setLastCodexResetCreditsAvailable(codexResult.resetCreditsAvailable);
   }
+  // codex.ts reports resetCreditsAvailable:null for both the cooldown-skip and the failure-fallback
+  // path (it never re-derives a stale count from an old response) — falling back to the cached
+  // last-good value here means the dropdown's "Reset-Credits" row does not flicker away on every
+  // cooldown-skipped tick or transient failure, mirroring how buckets already fall back above.
+  const codexResetCreditsAvailable = isFreshCodexSuccess
+    ? codexResult.resetCreditsAvailable
+    : deps.cache.getLastCodexResetCreditsAvailable();
 
   const allBuckets = [...anthropicBuckets, ...codexBuckets];
   const previousAllBuckets = [...(previousAnthropicBuckets ?? []), ...(previousCodexBuckets ?? [])];
@@ -163,7 +186,7 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
     anthropicBuckets,
     codexBuckets,
     codexHint: codexResult.hint,
-    codexResetCreditsAvailable: codexResult.resetCreditsAvailable,
+    codexResetCreditsAvailable,
     lastUpdatedAt,
     anthropicStale,
     codexStale,

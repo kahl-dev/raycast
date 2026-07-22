@@ -2,47 +2,18 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "ai-limits",
   "title": "AI Limits",
-  "description": "Claude Code Session, Claude Wochenlimit, Fable und OpenAI/Codex Nutzungslimits live in der macOS Menubar",
+  "description": "Anthropic- und OpenAI-Nutzungslimits live in der macOS Menubar",
   "icon": "extension-icon.png",
   "author": "kahl.dev",
   "license": "MIT",
   "categories": ["Productivity"],
   "commands": [
     {
-      "name": "menu-bar",
+      "name": "anthropic",
       "title": "AI Limits",
-      "description": "Claude- und Codex-Nutzungslimits live in der Menubar",
+      "description": "Anthropic- und OpenAI-Nutzungslimits (Session, Woche, höchstes Modell-Wochenlimit, OpenAI) live in der Menubar",
       "mode": "menu-bar",
       "interval": "5m"
-    },
-    {
-      "name": "pill-claude-week",
-      "title": "Claude Woche Pill",
-      "description": "Claude-Wochenlimit als Pill-Icon in der Menubar",
-      "mode": "menu-bar",
-      "interval": "5m"
-    },
-    {
-      "name": "pill-fable",
-      "title": "Fable Pill",
-      "description": "Höchstes Fable-Wochenlimit als Pill-Icon in der Menubar",
-      "mode": "menu-bar",
-      "interval": "5m"
-    },
-    {
-      "name": "pill-openai",
-      "title": "OpenAI Pill",
-      "description": "OpenAI-Nutzungslimit als Pill-Icon in der Menubar",
-      "mode": "menu-bar",
-      "interval": "5m"
-    },
-    {
-      "name": "pill-session",
-      "title": "Claude Session Pill",
-      "description": "Claude-Session-Limit als Pill-Icon in der Menubar",
-      "mode": "menu-bar",
-      "interval": "5m",
-      "disabledByDefault": true
     }
   ],
   "dependencies": {

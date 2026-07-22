@@ -13,28 +13,12 @@ type ExtensionPreferences = {}
 declare type Preferences = ExtensionPreferences
 
 declare namespace Preferences {
-  /** Preferences accessible in the `menu-bar` command */
-  export type MenuBar = ExtensionPreferences & {}
-  /** Preferences accessible in the `pill-claude-week` command */
-  export type PillClaudeWeek = ExtensionPreferences & {}
-  /** Preferences accessible in the `pill-fable` command */
-  export type PillFable = ExtensionPreferences & {}
-  /** Preferences accessible in the `pill-openai` command */
-  export type PillOpenai = ExtensionPreferences & {}
-  /** Preferences accessible in the `pill-session` command */
-  export type PillSession = ExtensionPreferences & {}
+  /** Preferences accessible in the `anthropic` command */
+  export type Anthropic = ExtensionPreferences & {}
 }
 
 declare namespace Arguments {
-  /** Arguments passed to the `menu-bar` command */
-  export type MenuBar = {}
-  /** Arguments passed to the `pill-claude-week` command */
-  export type PillClaudeWeek = {}
-  /** Arguments passed to the `pill-fable` command */
-  export type PillFable = {}
-  /** Arguments passed to the `pill-openai` command */
-  export type PillOpenai = {}
-  /** Arguments passed to the `pill-session` command */
-  export type PillSession = {}
+  /** Arguments passed to the `anthropic` command */
+  export type Anthropic = {}
 }
 

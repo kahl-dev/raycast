@@ -1,9 +1,5 @@
 import { Bucket, displaySeverity, secondsUntil, Severity } from "./types";
 
-export type TitleLayout = "weekly" | "all" | "max" | "icon";
-
-export const TITLE_LAYOUTS: TitleLayout[] = ["weekly", "all", "max", "icon"];
-
 const WEEKDAY_LABELS_GERMAN = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
 const SECONDS_PER_MINUTE = 60;
@@ -55,37 +51,19 @@ export function formatResetGerman(date: Date, now: Date = new Date()): string {
   return `${base} (in ${formatDurationShort(secondsUntilReset)})`;
 }
 
-const SEVERITY_RANK: Record<Severity, number> = { normal: 0, warning: 1, critical: 2 };
-
 export interface BucketSeverity {
   bucket: Bucket;
   severity: Severity;
 }
 
-// Precomputes displaySeverity once per bucket so a render needing both the worst-of-all summary
-// (menu bar icon tint) and each bucket's own severity (dropdown row dot color) does not compute
-// displaySeverity twice per bucket — see menu-bar.tsx's BucketRow.
+// Precomputes displaySeverity once per bucket so a dropdown render needing each bucket's own
+// severity (BucketRow's dot color, dropdown.tsx) does not recompute displaySeverity redundantly.
 export function computeBucketSeverities(buckets: Bucket[], now: Date): BucketSeverity[] {
   return buckets.map((bucket) => ({ bucket, severity: displaySeverity(bucket, now) }));
 }
 
-// Worst pace-aware displaySeverity across all buckets — NOT necessarily the highest-percent
-// bucket's severity, since a lower-percent bucket running ahead of its window's pace can be
-// worse than a higher-percent bucket that is merely near the end of an already-mostly-elapsed
-// window. Takes precomputed severities (computeBucketSeverities) rather than buckets+now so it
-// stays a pure reduction, independent of how those severities were derived.
-export function highestDisplaySeverity(bucketSeverities: BucketSeverity[]): Severity {
-  let worst: Severity = "normal";
-  for (const { severity } of bucketSeverities) {
-    if (SEVERITY_RANK[severity] > SEVERITY_RANK[worst]) {
-      worst = severity;
-    }
-  }
-  return worst;
-}
-
-// Exported for reuse by pill-selection.ts (the fable pill's "highest weekly_scoped bucket" rule
-// is the same reduction, just applied to a pre-filtered subset).
+// Exported for reuse by menu-bar-title.ts (the menu-bar title's "F" slot uses the same
+// highest-percent reduction, applied to a pre-filtered weekly_scoped subset).
 export function highestPercentBucket(buckets: Bucket[]): Bucket | null {
   if (buckets.length === 0) {
     return null;
@@ -93,33 +71,13 @@ export function highestPercentBucket(buckets: Bucket[]): Bucket | null {
   return buckets.reduce((highest, current) => (current.percent > highest.percent ? current : highest));
 }
 
-// Titel-Slots sind bewusst fix (nicht generisch aus limits[] abgeleitet) — nur das Dropdown
-// ist vollständig generisch. Neue Bucket-Kinds tauchen im Dropdown auf, aber nicht im Titel,
-// bis sie hier explizit verdrahtet werden.
-function titleLetterFor(bucket: Bucket): string {
-  // OpenAI ist bewusst auf "O" gepinnt, unabhängig vom Label-Wortlaut — der Buchstabe soll
-  // stabil bleiben, auch wenn das Label später z.B. "Codex" heißt. Nicht durch die
-  // generische Initiale ersetzen, obwohl sie heute dasselbe ergeben würde.
-  if (bucket.provider === "openai") {
-    return "O";
-  }
-  return bucket.label.charAt(0).toUpperCase();
-}
-
-function titleSlot(bucket: Bucket | null): string | null {
-  if (bucket === null) {
-    return null;
-  }
-  return `${titleLetterFor(bucket)}${Math.round(bucket.percent)}`;
-}
-
 function findBucketById(buckets: Bucket[], id: string): Bucket | null {
   return buckets.find((bucket) => bucket.id === id) ?? null;
 }
 
-// Exported for reuse by pill-selection.ts (each pill kind other than "fable" is exactly one of
-// these fixed-id lookups) and dropdown.tsx (the OpenAI reset-credits row needs the primary bucket
-// specifically).
+// Exported for reuse by menu-bar-title.ts (each of the menu-bar title's four fixed slots is
+// exactly one of these fixed-id lookups) and dropdown.tsx (the OpenAI reset-credits row needs the
+// primary bucket specifically).
 export function findSessionBucket(buckets: Bucket[]): Bucket | null {
   return findBucketById(buckets, "anthropic:session");
 }
@@ -134,39 +92,4 @@ export function findHighestWeeklyScopedBucket(buckets: Bucket[]): Bucket | null 
 
 export function findPrimaryOpenAiBucket(buckets: Bucket[]): Bucket | null {
   return findBucketById(buckets, "openai:primary");
-}
-
-function findHighestOpenAiBucket(buckets: Bucket[]): Bucket | null {
-  return highestPercentBucket(buckets.filter((bucket) => bucket.provider === "openai"));
-}
-
-function buildSlotTitle(buckets: Bucket[], includeSession: boolean): string {
-  const slots = [
-    includeSession ? findSessionBucket(buckets) : null,
-    findWeeklyAllBucket(buckets),
-    findHighestWeeklyScopedBucket(buckets),
-    findHighestOpenAiBucket(buckets),
-  ];
-
-  return slots
-    .map(titleSlot)
-    .filter((slot): slot is string => slot !== null)
-    .join(" ");
-}
-
-function buildMaxTitle(buckets: Bucket[]): string {
-  return titleSlot(highestPercentBucket(buckets)) ?? "";
-}
-
-export function buildMenuBarTitle(layout: TitleLayout, buckets: Bucket[]): string {
-  if (layout === "icon") {
-    return "";
-  }
-  if (layout === "max") {
-    return buildMaxTitle(buckets);
-  }
-  if (layout === "all") {
-    return buildSlotTitle(buckets, true);
-  }
-  return buildSlotTitle(buckets, false);
 }

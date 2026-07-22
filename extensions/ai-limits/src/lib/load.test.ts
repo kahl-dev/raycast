@@ -9,12 +9,14 @@ import { Bucket, Provider } from "./types";
 
 interface FakeCacheStore {
   lastAnthropicAttemptAt: Date | null;
+  lastCodexAttemptAt: Date | null;
   lastCodexLoginAttemptAt: Date | null;
   lastGoodAnthropicBuckets: Bucket[] | null;
   lastGoodCodexBuckets: Bucket[] | null;
   firedAlertKeys: Set<string>;
   lastUpdatedAt: Date | null;
   bucketHistory: Record<string, HistoryPoint[]>;
+  lastCodexResetCreditsAvailable: number | null;
 }
 
 // Map-backed in-memory fake — no module mocking. The `vi.fn` wrapper keeps the fake introspectable
@@ -23,12 +25,14 @@ interface FakeCacheStore {
 function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDependencies {
   const store: FakeCacheStore = {
     lastAnthropicAttemptAt: null,
+    lastCodexAttemptAt: null,
     lastCodexLoginAttemptAt: null,
     lastGoodAnthropicBuckets: null,
     lastGoodCodexBuckets: null,
     firedAlertKeys: new Set<string>(),
     lastUpdatedAt: null,
     bucketHistory: {},
+    lastCodexResetCreditsAvailable: null,
     ...initial,
   };
 
@@ -36,6 +40,10 @@ function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDepend
     getLastAnthropicAttemptAt: vi.fn((): Date | null => store.lastAnthropicAttemptAt),
     setLastAnthropicAttemptAt: vi.fn((date: Date): void => {
       store.lastAnthropicAttemptAt = date;
+    }),
+    getLastCodexAttemptAt: vi.fn((): Date | null => store.lastCodexAttemptAt),
+    setLastCodexAttemptAt: vi.fn((date: Date): void => {
+      store.lastCodexAttemptAt = date;
     }),
     getLastCodexLoginAttemptAt: vi.fn((): Date | null => store.lastCodexLoginAttemptAt),
     setLastCodexLoginAttemptAt: vi.fn((date: Date): void => {
@@ -62,6 +70,10 @@ function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDepend
     getBucketHistory: vi.fn((bucketId: string): HistoryPoint[] => store.bucketHistory[bucketId] ?? []),
     setBucketHistory: vi.fn((bucketId: string, history: HistoryPoint[]): void => {
       store.bucketHistory[bucketId] = history;
+    }),
+    getLastCodexResetCreditsAvailable: vi.fn((): number | null => store.lastCodexResetCreditsAvailable),
+    setLastCodexResetCreditsAvailable: vi.fn((value: number | null): void => {
+      store.lastCodexResetCreditsAvailable = value;
     }),
   };
 }
@@ -225,6 +237,77 @@ describe("loadUsageData", () => {
     expect(result.codexResetCreditsAvailable).to.equal(2);
   });
 
+  it("feature: a fresh successful codex fetch overwrites the previously cached reset-credits value", async () => {
+    const now = new Date("2026-07-21T09:00:00.000Z");
+    const cache = createFakeCache({ lastCodexResetCreditsAvailable: 5 });
+    const bodyWithResetCredits = { ...codexFixture, rate_limit_reset_credits: { available_count: 2 } };
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => {
+        throw new Error("Anthropic-Token nicht im Keychain gefunden");
+      },
+      readAuth: async () => codexAuth,
+      runLoginStatus: async () => {
+        throw new Error("should not be called on a clean codex success");
+      },
+      fetchImplementation: async () => jsonResponse(200, bodyWithResetCredits),
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    expect(result.codexResetCreditsAvailable).to.equal(2);
+    expect(cache.setLastCodexResetCreditsAvailable).toHaveBeenCalledWith(2);
+  });
+
+  it("cooldown-skip: within the codex cooldown, returns the previously cached reset-credits value instead of null", async () => {
+    const now = new Date("2026-07-21T09:00:00.000Z");
+    const cache = createFakeCache({ lastCodexAttemptAt: now, lastCodexResetCreditsAvailable: 3 });
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => {
+        throw new Error("Anthropic-Token nicht im Keychain gefunden");
+      },
+      readAuth: async () => {
+        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
+      },
+      fetchImplementation: async () => {
+        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
+      },
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    expect(result.codexResetCreditsAvailable).to.equal(3);
+    expect(cache.setLastCodexResetCreditsAvailable).not.toHaveBeenCalled();
+  });
+
+  it("failure: a failed codex fetch keeps the previously cached reset-credits value, without persisting a new one", async () => {
+    const now = new Date("2026-07-21T09:00:00.000Z");
+    const cache = createFakeCache({ lastCodexResetCreditsAvailable: 4 });
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () => jsonResponse(200, { limits: [] }),
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    expect(result.codexResetCreditsAvailable).to.equal(4);
+    expect(cache.setLastCodexResetCreditsAvailable).not.toHaveBeenCalled();
+  });
+
   it("cooldown-skip: within the anthropic cooldown, skips readToken, passes through last-good, does not re-persist the attempt timestamp", async () => {
     const now = new Date("2026-07-21T09:00:00.000Z");
     const lastGoodAnthropicBuckets: Bucket[] = [bucket({ percent: 11 })];
@@ -246,6 +329,33 @@ describe("loadUsageData", () => {
     expect(readToken).not.toHaveBeenCalled();
     expect(result.anthropicBuckets).to.deep.equal(lastGoodAnthropicBuckets);
     expect(cache.setLastAnthropicAttemptAt).not.toHaveBeenCalled();
+  });
+
+  it("cooldown-skip: within the codex cooldown, skips readAuth, passes through last-good, does not re-persist the attempt timestamp", async () => {
+    const now = new Date("2026-07-21T09:00:00.000Z");
+    const lastGoodCodexBuckets: Bucket[] = [
+      bucket({ id: "openai:primary", provider: "openai", label: "OpenAI", percent: 42, windowSeconds: 604800 }),
+    ];
+    const cache = createFakeCache({ lastCodexAttemptAt: now, lastGoodCodexBuckets });
+    const readAuth = vi.fn(async () => codexAuth);
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth,
+      runLoginStatus: async () => {
+        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
+      },
+      // Only Anthropic actually fetches in this test (Codex is cooldown-skipped) — an empty
+      // limits[] is a valid, minimal Anthropic response (see anthropic.test.ts boundary case).
+      fetchImplementation: async () => jsonResponse(200, { limits: [] }),
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    expect(readAuth).not.toHaveBeenCalled();
+    expect(result.codexBuckets).to.deep.equal(lastGoodCodexBuckets);
+    expect(cache.setLastCodexAttemptAt).not.toHaveBeenCalled();
   });
 
   it("invariant: a bucket at 100% fires the 80 and 95 alerts exactly once; a repeat call with the same state fires nothing", async () => {

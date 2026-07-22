@@ -15,6 +15,7 @@ import {
 
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_AUTH_PATH = join(homedir(), ".codex", "auth.json");
+const CODEX_COOLDOWN_MS = 60 * 1000;
 const CODEX_LOGIN_COOLDOWN_MS = 60 * 60 * 1000;
 const CODEX_UNAUTHORIZED_ERROR_NAME = "CodexUnauthorizedError";
 
@@ -165,6 +166,15 @@ export function shouldAttemptCodexLogin(lastAttemptAt: Date | null, now: Date): 
   return hasElapsed(lastAttemptAt, now, CODEX_LOGIN_COOLDOWN_MS);
 }
 
+// Cooldown-Gate für den Fetch selbst — mirrors isWithinAnthropicCooldown (anthropic.ts). The
+// menu-bar command's own 5-minute interval tick and a manual refresh can overlap — this gate
+// collapses concurrent calls to at most one real network request per cooldown window. Separate
+// from CODEX_LOGIN_COOLDOWN_MS: this gate skips the network call entirely, the login debounce only
+// gates the `codex login status` retry after a 401.
+export function isWithinCodexCooldown(lastAttemptAt: Date | null, now: Date): boolean {
+  return !hasElapsed(lastAttemptAt, now, CODEX_COOLDOWN_MS);
+}
+
 // >=100 rather than ===100: Codex used_percent can exceed 100 (see parseCodexUsage's boundary
 // test), and the API also reports fractional values (e.g. 100.4) that round to "100%" in the UI
 // but would silently miss a strict equality check.
@@ -174,6 +184,7 @@ export function shouldShowRedeemHint(primaryBucket: Bucket | null): boolean {
 
 export interface CodexLoadDependencies {
   now: () => Date;
+  lastAttemptAt: Date | null;
   lastLoginAttemptAt: Date | null;
   lastGoodBuckets: Bucket[] | null;
   readAuth: () => Promise<CodexAuthTokens>;
@@ -183,6 +194,10 @@ export interface CodexLoadDependencies {
 
 export interface CodexLoadResult {
   buckets: Bucket[] | null;
+  // false means the network call was skipped by the cooldown gate — check isWithinCodexCooldown
+  // separately if that distinction matters; callers only need this to know whether to persist a
+  // new lastAttemptAt timestamp.
+  attempted: boolean;
   loginAttempted: boolean;
   hint: string | null;
   error: Error | null;
@@ -191,9 +206,26 @@ export interface CodexLoadResult {
   resetCreditsAvailable: number | null;
 }
 
+// Timestamp wird vom Aufrufer bei JEDEM Versuch (attempted:true) persistiert — Erfolg UND Fehler —
+// damit ein wiederholt fehlschlagender Call den 60s-Cooldown trotzdem einhält. Das bestehende
+// 1h-Login-Retry-Debounce (shouldAttemptCodexLogin/lastLoginAttemptAt) bleibt davon unabhängig.
 export async function loadCodexBuckets(deps: CodexLoadDependencies): Promise<CodexLoadResult> {
+  const now = deps.now();
+
+  if (isWithinCodexCooldown(deps.lastAttemptAt, now)) {
+    return {
+      buckets: deps.lastGoodBuckets,
+      attempted: false,
+      loginAttempted: false,
+      hint: null,
+      error: null,
+      resetCreditsAvailable: null,
+    };
+  }
+
   const fallback = (loginAttempted: boolean, hint: string | null, error: unknown): CodexLoadResult => ({
     buckets: deps.lastGoodBuckets,
+    attempted: true,
     loginAttempted,
     hint,
     error: toError(error),
@@ -211,6 +243,7 @@ export async function loadCodexBuckets(deps: CodexLoadDependencies): Promise<Cod
     const usage = await fetchCodexUsage(auth, deps.fetchImplementation);
     return {
       buckets: usage.buckets,
+      attempted: true,
       loginAttempted: false,
       hint: null,
       error: null,
@@ -221,7 +254,6 @@ export async function loadCodexBuckets(deps: CodexLoadDependencies): Promise<Cod
       return fallback(false, null, error);
     }
 
-    const now = deps.now();
     if (!shouldAttemptCodexLogin(deps.lastLoginAttemptAt, now)) {
       return fallback(false, "Login abgelaufen", error);
     }
@@ -232,6 +264,7 @@ export async function loadCodexBuckets(deps: CodexLoadDependencies): Promise<Cod
       const usage = await fetchCodexUsage(refreshedAuth, deps.fetchImplementation);
       return {
         buckets: usage.buckets,
+        attempted: true,
         loginAttempted: true,
         hint: null,
         error: null,

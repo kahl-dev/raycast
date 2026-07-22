@@ -7,18 +7,9 @@ import {
   formatResetGerman,
   formatTimeShort,
   formatWeekdayAndTime,
-  TITLE_LAYOUTS,
-  TitleLayout,
 } from "./lib/format";
 import { projectLimitHit } from "./lib/projection";
 import { Bucket, Severity } from "./lib/types";
-
-const LAYOUT_LABELS: Record<TitleLayout, string> = {
-  weekly: "Woche (Standard)",
-  all: "Alle Werte",
-  max: "Nur höchster Wert",
-  icon: "Nur Icon",
-};
 
 export function severityColor(severity: Severity): Color {
   if (severity === "critical") {
@@ -45,26 +36,17 @@ function BucketRow({ bucket, severity, now }: { bucket: Bucket; severity: Severi
   );
 }
 
-export interface LayoutSectionProps {
-  layout: TitleLayout;
-  onSelectLayout: (layout: TitleLayout) => void;
-}
-
 export interface DropdownContentProps {
   anthropicBuckets: Bucket[];
   codexBuckets: Bucket[];
-  // Fetch-only signals (a live codex.ts load result) — null for the pill commands, which read
-  // last-good buckets from Cache and never fetch, so they have no hint or credits count to show.
+  // Straight from the live codex.ts load result (the single command always fetches — see
+  // anthropic.tsx) — null simply means this fetch reported no hint / no reset credits.
   codexHint: string | null;
   codexResetCreditsAvailable: number | null;
   lastUpdatedAt: Date | null;
   staleSuffixText: string;
   now: Date;
   onRefresh: () => void;
-  // Present only for the main command — see menu-bar.tsx and pill-command.tsx for the "why":
-  // changing title layout has no visible effect on a pill's fixed percent title, so pill dropdowns
-  // omit this section rather than show a control that does nothing there.
-  layoutSection?: LayoutSectionProps;
 }
 
 export function DropdownContent(props: DropdownContentProps) {
@@ -76,7 +58,6 @@ export function DropdownContent(props: DropdownContentProps) {
     props.lastUpdatedAt === null
       ? "Noch nicht aktualisiert"
       : `Aktualisiert ${formatTimeShort(props.lastUpdatedAt)}${props.staleSuffixText}`;
-  const layoutSection = props.layoutSection;
 
   return (
     <>
@@ -107,19 +88,6 @@ export function DropdownContent(props: DropdownContentProps) {
           />
         )}
       </MenuBarExtra.Section>
-
-      {layoutSection && (
-        <MenuBarExtra.Section title="Layout">
-          {TITLE_LAYOUTS.map((option) => (
-            <MenuBarExtra.Item
-              key={option}
-              title={LAYOUT_LABELS[option]}
-              icon={option === layoutSection.layout ? Icon.Checkmark : undefined}
-              onAction={() => layoutSection.onSelectLayout(option)}
-            />
-          ))}
-        </MenuBarExtra.Section>
-      )}
 
       <MenuBarExtra.Section>
         <MenuBarExtra.Item

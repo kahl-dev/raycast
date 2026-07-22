@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   fetchCodexUsage,
   isCodexUnauthorizedError,
+  isWithinCodexCooldown,
   loadCodexBuckets,
   parseCodexResetCreditsAvailable,
   parseCodexUsage,
@@ -254,6 +255,24 @@ describe("isCodexUnauthorizedError", () => {
   });
 });
 
+describe("isWithinCodexCooldown", () => {
+  it("is false when there has never been an attempt", () => {
+    expect(isWithinCodexCooldown(null, new Date())).to.equal(false);
+  });
+
+  it("boundary: true at 59999ms elapsed (just under 60s)", () => {
+    const lastAttemptAt = new Date("2026-07-21T09:00:00.000Z");
+    const now = new Date(lastAttemptAt.getTime() + 59_999);
+    expect(isWithinCodexCooldown(lastAttemptAt, now)).to.equal(true);
+  });
+
+  it("boundary: false at exactly 60000ms elapsed", () => {
+    const lastAttemptAt = new Date("2026-07-21T09:00:00.000Z");
+    const now = new Date(lastAttemptAt.getTime() + 60_000);
+    expect(isWithinCodexCooldown(lastAttemptAt, now)).to.equal(false);
+  });
+});
+
 describe("shouldAttemptCodexLogin", () => {
   it("is true when there has never been a login attempt", () => {
     expect(shouldAttemptCodexLogin(null, new Date())).to.equal(true);
@@ -302,9 +321,38 @@ describe("loadCodexBuckets", () => {
   ];
   const auth = { accessToken: "codex-token", accountId: "acct-1" };
 
+  it("skips the network call within the codex cooldown and returns last-good", async () => {
+    let readAuthCalled = false;
+    const result = await loadCodexBuckets({
+      now: () => now,
+      lastAttemptAt: new Date(now.getTime() - 1000),
+      lastLoginAttemptAt: null,
+      lastGoodBuckets,
+      readAuth: async () => {
+        readAuthCalled = true;
+        return auth;
+      },
+      fetchImplementation: async () => jsonResponse(200, codexFixture),
+      runLoginStatus: async () => {
+        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
+      },
+    });
+
+    expect(readAuthCalled).to.equal(false);
+    expect(result).to.deep.equal({
+      buckets: lastGoodBuckets,
+      attempted: false,
+      loginAttempted: false,
+      hint: null,
+      error: null,
+      resetCreditsAvailable: null,
+    });
+  });
+
   it("returns fresh buckets on a clean success", async () => {
     const result = await loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: null,
       lastLoginAttemptAt: null,
       lastGoodBuckets: null,
       readAuth: async () => auth,
@@ -316,6 +364,7 @@ describe("loadCodexBuckets", () => {
 
     expect(result).to.deep.equal({
       buckets: parseCodexUsage(codexFixture),
+      attempted: true,
       loginAttempted: false,
       hint: null,
       error: null,
@@ -327,6 +376,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: null,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => {
@@ -339,6 +389,7 @@ describe("loadCodexBuckets", () => {
     });
 
     expect(loginCalled).to.equal(false);
+    expect(result.attempted).to.equal(true);
     expect(result.loginAttempted).to.equal(false);
     expect(result.hint).to.equal("Codex-Login nicht gefunden");
     expect(result.buckets).to.deep.equal(lastGoodBuckets);
@@ -350,6 +401,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: null,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => {
@@ -369,6 +421,7 @@ describe("loadCodexBuckets", () => {
 
     expect(loginCalled).to.equal(true);
     expect(authCallCount).to.equal(2);
+    expect(result.attempted).to.equal(true);
     expect(result.loginAttempted).to.equal(true);
     expect(result.hint).to.equal(null);
     expect(result.error).to.equal(null);
@@ -379,6 +432,7 @@ describe("loadCodexBuckets", () => {
   it("on 401 outside cooldown: retry still fails, falls back to last-good with a hint", async () => {
     const result = await loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: null,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => auth,
@@ -388,6 +442,7 @@ describe("loadCodexBuckets", () => {
       },
     });
 
+    expect(result.attempted).to.equal(true);
     expect(result.loginAttempted).to.equal(true);
     expect(result.hint).to.equal("Login abgelaufen");
     expect(result.buckets).to.deep.equal(lastGoodBuckets);
@@ -399,6 +454,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: null,
       lastLoginAttemptAt: new Date(now.getTime() - 1000),
       lastGoodBuckets,
       readAuth: async () => auth,
@@ -409,6 +465,7 @@ describe("loadCodexBuckets", () => {
     });
 
     expect(loginCalled).to.equal(false);
+    expect(result.attempted).to.equal(true);
     expect(result.loginAttempted).to.equal(false);
     expect(result.hint).to.equal("Login abgelaufen");
     expect(result.buckets).to.deep.equal(lastGoodBuckets);
@@ -419,6 +476,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
+      lastAttemptAt: null,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => auth,
@@ -429,6 +487,7 @@ describe("loadCodexBuckets", () => {
     });
 
     expect(loginCalled).to.equal(false);
+    expect(result.attempted).to.equal(true);
     expect(result.loginAttempted).to.equal(false);
     expect(result.hint).to.equal(null);
     expect(result.buckets).to.deep.equal(lastGoodBuckets);

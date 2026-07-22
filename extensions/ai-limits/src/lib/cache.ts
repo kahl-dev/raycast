@@ -1,5 +1,4 @@
 import { Cache } from "@raycast/api";
-import { TitleLayout, TITLE_LAYOUTS } from "./format";
 import { HistoryPoint, parseHistoryJson, serializeHistoryJson } from "./projection";
 import { Bucket, Provider } from "./types";
 
@@ -8,32 +7,15 @@ import { Bucket, Provider } from "./types";
 const cache = new Cache();
 
 const CACHE_KEYS = {
-  layout: "layout",
   lastAnthropicAttemptAt: "lastAnthropicAttemptAt",
+  lastCodexAttemptAt: "lastCodexAttemptAt",
   lastCodexLoginAttemptAt: "lastCodexLoginAttemptAt",
   lastGoodAnthropicBuckets: "lastGoodAnthropicBuckets",
   lastGoodCodexBuckets: "lastGoodCodexBuckets",
   firedAlertKeys: "firedAlertKeys",
   lastUpdatedAt: "lastUpdatedAt",
+  lastCodexResetCreditsAvailable: "lastCodexResetCreditsAvailable",
 } as const;
-
-const DEFAULT_LAYOUT: TitleLayout = "weekly";
-
-function isTitleLayout(value: string): value is TitleLayout {
-  return (TITLE_LAYOUTS as string[]).includes(value);
-}
-
-export function getLayout(): TitleLayout {
-  const stored = cache.get(CACHE_KEYS.layout);
-  if (stored !== undefined && isTitleLayout(stored)) {
-    return stored;
-  }
-  return DEFAULT_LAYOUT;
-}
-
-export function setLayout(layout: TitleLayout): void {
-  cache.set(CACHE_KEYS.layout, layout);
-}
 
 function getDate(key: string): Date | null {
   const stored = cache.get(key);
@@ -56,6 +38,14 @@ export function setLastAnthropicAttemptAt(date: Date): void {
   setDate(CACHE_KEYS.lastAnthropicAttemptAt, date);
 }
 
+export function getLastCodexAttemptAt(): Date | null {
+  return getDate(CACHE_KEYS.lastCodexAttemptAt);
+}
+
+export function setLastCodexAttemptAt(date: Date): void {
+  setDate(CACHE_KEYS.lastCodexAttemptAt, date);
+}
+
 export function getLastCodexLoginAttemptAt(): Date | null {
   return getDate(CACHE_KEYS.lastCodexLoginAttemptAt);
 }
@@ -70,6 +60,21 @@ export function getLastUpdatedAt(): Date | null {
 
 export function setLastUpdatedAt(date: Date): void {
   setDate(CACHE_KEYS.lastUpdatedAt, date);
+}
+
+// A stale reset-credits count is still more useful than the row vanishing outright: loadUsageData
+// (load.ts) falls back to this last genuinely observed value whenever a load skips the Codex fetch
+// (60s cooldown gate) or the fetch fails, so the dropdown's "Reset-Credits" row does not flicker
+// away on every cooldown-skipped tick. JSON.stringify/parse (not a raw String(value)) so a genuine
+// `null` (fetched successfully, zero/no reset credits reported) round-trips distinctly from the
+// cache-miss `undefined` that getDate-style helpers treat as "never written".
+export function getLastCodexResetCreditsAvailable(): number | null {
+  const stored = cache.get(CACHE_KEYS.lastCodexResetCreditsAvailable);
+  return stored === undefined ? null : (JSON.parse(stored) as number | null);
+}
+
+export function setLastCodexResetCreditsAvailable(value: number | null): void {
+  cache.set(CACHE_KEYS.lastCodexResetCreditsAvailable, JSON.stringify(value));
 }
 
 function serializeBuckets(buckets: Bucket[]): string {
