@@ -153,9 +153,7 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   // prefix — see thresholds.ts) rather than a separate cache slot, so both dedup sets self-clean
   // together via pruneFiredKeys.
   const resetEvents = determineResetEvents(previousAllBuckets, allBuckets);
-  const resetEventsToFire = resetEvents.filter(
-    (event) => !prunedFired.has(resetEventKey(event.bucket.id, event.bucket.resetsAt.toISOString())),
-  );
+  const resetEventsToFire = resetEvents.filter((event) => !prunedFired.has(resetEventKey(event.bucket.id)));
 
   // allSettled (not all): a failed osascript call must not throw out of loadUsageData — that
   // would discard the already-fetched, already-cached buckets and skip persisting fired-keys,

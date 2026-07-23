@@ -4,13 +4,23 @@ import { Bucket, WARNING_THRESHOLD, CRITICAL_THRESHOLD } from "./types";
 export const ALERT_THRESHOLDS = [WARNING_THRESHOLD, CRITICAL_THRESHOLD] as const;
 export type AlertThreshold = (typeof ALERT_THRESHOLDS)[number];
 
+// How far percent must fall below a threshold before that alert re-arms. Anthropic usage limits are
+// rolling windows: percent climbs with use and drifts down as old usage ages out, so a bare "below
+// threshold" re-arm could flap at the boundary. A few points of hysteresis avoids that while still
+// re-arming cleanly after a real reset (which drops percent to near zero). Tunable.
+const REARM_HYSTERESIS = 5;
+
 export interface FiredAlert {
   bucket: Bucket;
   threshold: AlertThreshold;
 }
 
-export function alertKey(bucket: Bucket, threshold: AlertThreshold): string {
-  return `${bucket.id}:${bucket.resetsAt.toISOString()}:${threshold}`;
+// The dedup key deliberately does NOT include resetsAt. Anthropic's usage endpoint is a rolling
+// window that returns resets_at = request_time + window, so resets_at drifts on every fetch — keying
+// on it made pruneFiredKeys drop the key each tick and the alert re-fired forever (the original bug).
+// Re-arming is driven by percent instead (see pruneFiredKeys), which is the only stable signal.
+export function alertKey(bucketId: string, threshold: AlertThreshold): string {
+  return `${bucketId}:${threshold}`;
 }
 
 export function determineAlertsToFire(buckets: Bucket[], firedKeys: ReadonlySet<string>): FiredAlert[] {
@@ -20,7 +30,7 @@ export function determineAlertsToFire(buckets: Bucket[], firedKeys: ReadonlySet<
       if (bucket.percent < threshold) {
         continue;
       }
-      if (firedKeys.has(alertKey(bucket, threshold))) {
+      if (firedKeys.has(alertKey(bucket.id, threshold))) {
         continue;
       }
       alerts.push({ bucket, threshold });
@@ -40,35 +50,36 @@ function addKeys<T>(keys: ReadonlySet<string>, items: T[], keyFor: (item: T) => 
 }
 
 export function markAlertsFired(firedKeys: ReadonlySet<string>, fired: FiredAlert[]): Set<string> {
-  return addKeys(firedKeys, fired, (alert) => alertKey(alert.bucket, alert.threshold));
+  return addKeys(firedKeys, fired, (alert) => alertKey(alert.bucket.id, alert.threshold));
 }
 
 const RESET_KEY_PREFIX = "reset:";
 
-export function resetEventKey(bucketId: string, resetsAtIso: string): string {
-  return `${RESET_KEY_PREFIX}${bucketId}:${resetsAtIso}`;
+export function resetEventKey(bucketId: string): string {
+  return `${RESET_KEY_PREFIX}${bucketId}`;
 }
 
-// Selbstbereinigend, wie pruneFiredKeys unten: ein gefeuerte Key bleibt nur gültig, solange
-// (Bucket, resetsAt) unverändert ist. Zwei Key-Formen laufen durch dasselbe firedAlertKeys-Cache-
-// Feld — Alert-Keys (`${id}:${resetsAtIso}:${threshold}`) und Reset-Keys (`reset:${id}:${resetsAtIso}`,
-// kein Threshold-Suffix) — daher der Präfix-Branch statt eines einzigen Präfix-Musters.
+// Re-arm logic, driven by percent (never resetsAt — see alertKey). Iterating the CURRENT buckets
+// means a fired key is retained only while its bucket still exists and still justifies suppression;
+// keys for vanished buckets are simply never re-added. An alert key stays suppressed while percent is
+// still at/above the threshold (minus hysteresis); once percent falls further, the key drops and the
+// alert re-arms for the next genuine climb. A reset key stays set while the bucket is still "empty"
+// (percent < WARNING); once percent climbs back to WARNING the key drops so the next drop can re-fire.
 export function pruneFiredKeys(firedKeys: ReadonlySet<string>, buckets: Bucket[]): Set<string> {
-  const currentAlertPrefixes = buckets.map((bucket) => `${bucket.id}:${bucket.resetsAt.toISOString()}:`);
-  const currentResetKeys = new Set(buckets.map((bucket) => resetEventKey(bucket.id, bucket.resetsAt.toISOString())));
-  const pruned = new Set<string>();
-  for (const key of firedKeys) {
-    if (key.startsWith(RESET_KEY_PREFIX)) {
-      if (currentResetKeys.has(key)) {
-        pruned.add(key);
+  const retained = new Set<string>();
+  for (const bucket of buckets) {
+    for (const threshold of ALERT_THRESHOLDS) {
+      const key = alertKey(bucket.id, threshold);
+      if (firedKeys.has(key) && bucket.percent >= threshold - REARM_HYSTERESIS) {
+        retained.add(key);
       }
-      continue;
     }
-    if (currentAlertPrefixes.some((prefix) => key.startsWith(prefix))) {
-      pruned.add(key);
+    const resetKey = resetEventKey(bucket.id);
+    if (firedKeys.has(resetKey) && bucket.percent < WARNING_THRESHOLD) {
+      retained.add(resetKey);
     }
   }
-  return pruned;
+  return retained;
 }
 
 export function formatAlertMessage(bucket: Bucket, threshold: AlertThreshold, now: Date = new Date()): string {
@@ -81,7 +92,9 @@ export interface ResetEvent {
 
 // A "reset event" is detected purely by comparing two snapshots (previous vs current last-good
 // buckets) for the same bucket id: the bucket previously stood at >=WARNING_THRESHOLD and its
-// resetsAt changed, meaning the window rolled over and the limit is available again.
+// percent has since dropped back to meaningful headroom (below WARNING_THRESHOLD minus hysteresis),
+// meaning the rolling window has freed up. resetsAt is NOT consulted — it drifts every fetch under a
+// rolling window (see alertKey), so a resetsAt change is not a reliable signal that the limit reset.
 export function determineResetEvents(previousBuckets: Bucket[], currentBuckets: Bucket[]): ResetEvent[] {
   const events: ResetEvent[] = [];
   for (const current of currentBuckets) {
@@ -92,7 +105,7 @@ export function determineResetEvents(previousBuckets: Bucket[], currentBuckets: 
     if (previous.percent < WARNING_THRESHOLD) {
       continue;
     }
-    if (previous.resetsAt.getTime() === current.resetsAt.getTime()) {
+    if (current.percent >= WARNING_THRESHOLD - REARM_HYSTERESIS) {
       continue;
     }
     events.push({ bucket: current });
@@ -101,7 +114,7 @@ export function determineResetEvents(previousBuckets: Bucket[], currentBuckets: 
 }
 
 export function markResetEventsFired(firedKeys: ReadonlySet<string>, events: ResetEvent[]): Set<string> {
-  return addKeys(firedKeys, events, (event) => resetEventKey(event.bucket.id, event.bucket.resetsAt.toISOString()));
+  return addKeys(firedKeys, events, (event) => resetEventKey(event.bucket.id));
 }
 
 export function formatResetMessage(bucket: Bucket): string {

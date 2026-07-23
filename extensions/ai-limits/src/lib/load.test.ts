@@ -386,6 +386,56 @@ describe("loadUsageData", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("regression: a bucket held at 99% while its resets_at drifts stays silent after the first alert", async () => {
+    // The rolling-window bug: Anthropic recomputes resets_at = now + window on each request, so a dedup
+    // key that embeds resets_at changes every fetch and both the alert AND the reset notification
+    // re-fire forever. This guard holds Fable at a constant 99% but drifts resets_at between two genuine
+    // fetches (>60s apart, past the anthropic cooldown gate). The second fetch's zero-notification
+    // assertion covers both dedup paths at once: no re-fired 80/95 alert and no spurious reset message.
+    const cache = createFakeCache();
+    const notify = vi.fn(async (): Promise<void> => {});
+    const fableBody = (resetsAtIso: string) => ({
+      limits: [
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 99,
+          resets_at: resetsAtIso,
+          scope: { model: { id: "fable", display_name: "Fable" } },
+        },
+      ],
+    });
+    const baseDeps = {
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      notify,
+    };
+
+    // First fetch: Fable at 99% fires the 80 and 95 alerts once each.
+    await loadUsageData({
+      ...baseDeps,
+      now: () => new Date("2026-07-21T09:00:00.000Z"),
+      fetchImplementation: async () => jsonResponse(200, fableBody("2026-07-28T09:00:00.000Z")),
+    });
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    // Second fetch >60s later (past the cooldown gate, so it genuinely re-fetches) with a drifted
+    // resets_at — the exact rolling-window signature that used to bust the dedup key.
+    notify.mockClear();
+    await loadUsageData({
+      ...baseDeps,
+      now: () => new Date("2026-07-21T09:01:01.000Z"),
+      fetchImplementation: async () => jsonResponse(200, fableBody("2026-07-28T09:01:01.000Z")),
+    });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it("feature: fires a reset notification when a bucket that was >=80 percent gets a new reset window", async () => {
     const now = new Date("2026-07-21T09:00:00.000Z");
     const staleResetsAt = new Date("2026-07-14T19:59:59.982Z");
