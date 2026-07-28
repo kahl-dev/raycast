@@ -11,8 +11,23 @@ import { buildMenuBarTitle } from "./lib/menu-bar-title";
 import { Bucket } from "./lib/types";
 import { loadDependencies } from "./load-dependencies";
 
+// BUMP THIS whenever UsageSnapshot gains or renames a field. useCachedPromise persists its resolved
+// value and hands it straight back on the next launch; its cache key is objecthash(args) inside a
+// namespace of objecthash(fn), and the fn text here does not change when lib/load.ts does — so
+// without a version in args, a snapshot written by an older build is restored into code that
+// expects the new shape. That is not a glitch: the stale snapshot renders, the render throws, and
+// the command dies before the fresh fetch can overwrite the cache, so every subsequent tick repeats
+// it. Observed 2026-07-28 after adding anthropicSkipped (crash loop 15:03 -> 16:08).
+const SNAPSHOT_VERSION = 2;
+
 export default function Command() {
-  const { data, isLoading, mutate } = useCachedPromise(() => loadUsageData(loadDependencies), []);
+  const { data, isLoading, mutate } = useCachedPromise(
+    (version: number) => {
+      void version; // consumed only by the cache key, which is objecthash(args)
+      return loadUsageData(loadDependencies);
+    },
+    [SNAPSHOT_VERSION],
+  );
   // Raycast unloads a menu-bar command once the menu closes — which an item's onAction does — and
   // only isLoading holds it open. mutate(asyncUpdate) does NOT raise isLoading while it awaits the
   // update (@raycast/utils 1.19.1), so without this the refresh fetch gets killed mid-flight.
@@ -39,13 +54,16 @@ export default function Command() {
     }
   }
 
+  // `data` crosses a deserialization boundary — it may be a snapshot persisted by an older build,
+  // so a field added since then is absent at runtime despite what the type says. SNAPSHOT_VERSION
+  // is the real guard; the `?? []` below keeps a forgotten bump from wedging the command.
   return (
     <MenuBarExtra title={title} isLoading={isLoading || isRefreshing} tooltip="AI Limits">
       {data && (
         <DropdownContent
           anthropicBuckets={data.anthropicBuckets}
           codexBuckets={data.codexBuckets}
-          anthropicSkipped={data.anthropicSkipped}
+          anthropicSkipped={data.anthropicSkipped ?? []}
           codexHint={data.codexHint}
           codexResetCreditsAvailable={data.codexResetCreditsAvailable}
           lastUpdatedAt={data.lastUpdatedAt}
