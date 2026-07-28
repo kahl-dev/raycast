@@ -6,8 +6,9 @@ import { jsonResponse, malformedJsonResponse } from "./__fixtures__/response";
 
 describe("parseAnthropicUsage", () => {
   it("renders limits[] generically, ignoring is_active (verified fixture has is_active:false on shown buckets)", () => {
-    const buckets = parseAnthropicUsage(anthropicFixture);
+    const { buckets, skipped } = parseAnthropicUsage(anthropicFixture);
 
+    expect(skipped).to.deep.equal([]);
     expect(buckets).to.have.length(3);
     expect(buckets.map((b) => b.id)).to.deep.equal([
       "anthropic:session",
@@ -22,12 +23,12 @@ describe("parseAnthropicUsage", () => {
 
   it("boundary: empty limits[] returns no buckets (does not fall back to legacy)", () => {
     expect(
-      parseAnthropicUsage({ limits: [], five_hour: { utilization: 1, resets_at: "2026-01-01T00:00:00Z" } }),
+      parseAnthropicUsage({ limits: [], five_hour: { utilization: 1, resets_at: "2026-01-01T00:00:00Z" } }).buckets,
     ).to.deep.equal([]);
   });
 
   it("boundary: falls back to five_hour/seven_day only when limits[] is entirely missing", () => {
-    const buckets = parseAnthropicUsage({
+    const { buckets } = parseAnthropicUsage({
       five_hour: { utilization: 12, resets_at: "2026-01-01T00:00:00.000Z" },
       seven_day: { utilization: 34, resets_at: "2026-01-08T00:00:00.000Z" },
     });
@@ -53,7 +54,7 @@ describe("parseAnthropicUsage", () => {
   });
 
   it("boundary: legacy fallback also applies when limits is explicitly null", () => {
-    const buckets = parseAnthropicUsage({
+    const { buckets } = parseAnthropicUsage({
       limits: null,
       five_hour: { utilization: 5, resets_at: "2026-01-01T00:00:00.000Z" },
       seven_day: null,
@@ -64,7 +65,7 @@ describe("parseAnthropicUsage", () => {
   });
 
   it("boundary: weekly_scoped with scope:null falls back to a generic id and label", () => {
-    const buckets = parseAnthropicUsage({
+    const { buckets } = parseAnthropicUsage({
       limits: [
         {
           kind: "weekly_scoped",
@@ -84,7 +85,7 @@ describe("parseAnthropicUsage", () => {
   });
 
   it("boundary: an unknown future kind still renders generically instead of being dropped", () => {
-    const buckets = parseAnthropicUsage({
+    const { buckets } = parseAnthropicUsage({
       limits: [
         {
           kind: "five_hour_burst",
@@ -113,10 +114,16 @@ describe("parseAnthropicUsage", () => {
       is_active: true,
     });
 
-    expect(parseAnthropicUsage({ limits: [makeLimit("session", "session")] })[0].windowSeconds).to.equal(18000);
-    expect(parseAnthropicUsage({ limits: [makeLimit("weekly_all", "weekly")] })[0].windowSeconds).to.equal(604800);
-    expect(parseAnthropicUsage({ limits: [makeLimit("weekly_scoped", "weekly")] })[0].windowSeconds).to.equal(604800);
-    expect(parseAnthropicUsage({ limits: [makeLimit("five_hour_burst", "session")] })[0].windowSeconds).to.equal(18000);
+    expect(parseAnthropicUsage({ limits: [makeLimit("session", "session")] }).buckets[0].windowSeconds).to.equal(18000);
+    expect(parseAnthropicUsage({ limits: [makeLimit("weekly_all", "weekly")] }).buckets[0].windowSeconds).to.equal(
+      604800,
+    );
+    expect(parseAnthropicUsage({ limits: [makeLimit("weekly_scoped", "weekly")] }).buckets[0].windowSeconds).to.equal(
+      604800,
+    );
+    expect(parseAnthropicUsage({ limits: [makeLimit("five_hour_burst", "session")] }).buckets[0].windowSeconds).to.equal(
+      18000,
+    );
   });
 
   it("boundary: percent 0, 100, and above 100 are all accepted without clamping", () => {
@@ -130,32 +137,108 @@ describe("parseAnthropicUsage", () => {
       is_active: true,
     });
 
-    expect(parseAnthropicUsage({ limits: [makeLimit(0)] })[0].percent).to.equal(0);
-    expect(parseAnthropicUsage({ limits: [makeLimit(100)] })[0].percent).to.equal(100);
-    expect(parseAnthropicUsage({ limits: [makeLimit(140)] })[0].percent).to.equal(140);
+    expect(parseAnthropicUsage({ limits: [makeLimit(0)] }).buckets[0].percent).to.equal(0);
+    expect(parseAnthropicUsage({ limits: [makeLimit(100)] }).buckets[0].percent).to.equal(100);
+    expect(parseAnthropicUsage({ limits: [makeLimit(140)] }).buckets[0].percent).to.equal(140);
   });
 
-  it("failure: throws a descriptive error when a limit has a non-numeric percent", () => {
-    expect(() =>
-      parseAnthropicUsage({
-        limits: [
-          {
-            kind: "session",
-            percent: "high",
-            resets_at: "2026-01-01T00:00:00.000Z",
-            scope: null,
-          },
-        ],
-      }),
-    ).to.throw(/percent/);
+  it("feature: a limit without resets_at inherits the reset window of its group", () => {
+    const result = parseAnthropicUsage({
+      limits: [
+        {
+          kind: "session",
+          group: "session",
+          percent: 2,
+          resets_at: "2026-07-28T11:50:00.000Z",
+          scope: null,
+          is_active: true,
+        },
+        {
+          kind: "weekly_all",
+          group: "weekly",
+          percent: 0,
+          resets_at: "2026-08-03T20:00:00.000Z",
+          scope: null,
+          is_active: false,
+        },
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 0,
+          resets_at: null,
+          scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          is_active: false,
+        },
+      ],
+    });
+
+    expect(result.skipped).to.deep.equal([]);
+    expect(result.buckets.map((b) => b.id)).to.deep.equal([
+      "anthropic:session",
+      "anthropic:weekly_all",
+      "anthropic:weekly_scoped:fable",
+    ]);
+    expect(result.buckets[2].percent).to.equal(0);
+    expect(result.buckets[2].resetsAt.toISOString()).to.equal("2026-08-03T20:00:00.000Z");
   });
 
-  it("failure: throws a descriptive error when a limit has an invalid resets_at", () => {
-    expect(() =>
-      parseAnthropicUsage({
-        limits: [{ kind: "session", percent: 10, resets_at: "not-a-date", scope: null }],
-      }),
-    ).to.throw(/resets_at/);
+  it("failure: a limit without resets_at whose group has no anchor is skipped, not fatal", () => {
+    const result = parseAnthropicUsage({
+      limits: [
+        { kind: "session", group: "session", percent: 2, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 0,
+          resets_at: null,
+          scope: { model: { id: null, display_name: "Fable" }, surface: null },
+        },
+      ],
+    });
+
+    expect(result.buckets.map((b) => b.id)).to.deep.equal(["anthropic:session"]);
+    expect(result.skipped).to.have.length(1);
+    expect(result.skipped[0]).to.match(/weekly_scoped/);
+  });
+
+  it("failure: one unparseable limit is skipped without discarding the rest of the response", () => {
+    const result = parseAnthropicUsage({
+      limits: [
+        { kind: "session", group: "session", percent: 23, resets_at: "2026-07-21T09:29:59.982Z", scope: null },
+        { kind: "weekly_all", group: "weekly", percent: "high", resets_at: "2026-07-27T19:59:59.982Z", scope: null },
+      ],
+    });
+
+    expect(result.buckets.map((b) => b.id)).to.deep.equal(["anthropic:session"]);
+    expect(result.skipped).to.have.length(1);
+    expect(result.skipped[0]).to.match(/percent/);
+  });
+
+  it("failure: reports a descriptive reason when a limit has a non-numeric percent", () => {
+    const result = parseAnthropicUsage({
+      limits: [
+        {
+          kind: "session",
+          percent: "high",
+          resets_at: "2026-01-01T00:00:00.000Z",
+          scope: null,
+        },
+      ],
+    });
+
+    expect(result.buckets).to.deep.equal([]);
+    expect(result.skipped).to.have.length(1);
+    expect(result.skipped[0]).to.match(/percent/);
+  });
+
+  it("failure: reports a descriptive reason when a limit has a malformed resets_at", () => {
+    const result = parseAnthropicUsage({
+      limits: [{ kind: "session", percent: 10, resets_at: "not-a-date", scope: null }],
+    });
+
+    expect(result.buckets).to.deep.equal([]);
+    expect(result.skipped).to.have.length(1);
+    expect(result.skipped[0]).to.match(/resets_at/);
   });
 
   it("failure: throws when limits is present but not an array", () => {
@@ -172,9 +255,10 @@ describe("fetchAnthropicUsage", () => {
   it("resolves with parsed buckets on a 200 response", async () => {
     const fetchImplementation: FetchFunction = async () => jsonResponse(200, anthropicFixture);
 
-    const buckets = await fetchAnthropicUsage("token-123", fetchImplementation);
+    const { buckets, skipped } = await fetchAnthropicUsage("token-123", fetchImplementation);
 
     expect(buckets).to.have.length(3);
+    expect(skipped).to.deep.equal([]);
   });
 
   it("rejects with the status code on a 429 response", async () => {
@@ -217,7 +301,6 @@ describe("isWithinAnthropicCooldown", () => {
 });
 
 describe("loadAnthropicBuckets", () => {
-  const now = new Date("2026-07-21T09:00:00.000Z");
   const lastGoodBuckets: Bucket[] = [
     {
       id: "anthropic:session",
@@ -229,11 +312,10 @@ describe("loadAnthropicBuckets", () => {
     },
   ];
 
-  it("skips the network call within the cooldown and returns last-good", async () => {
+  it("skips the network call when skipFetch is set and returns last-good", async () => {
     let fetchCalled = false;
     const result = await loadAnthropicBuckets({
-      now: () => now,
-      lastAttemptAt: new Date(now.getTime() - 1000),
+      skipFetch: true,
       lastGoodBuckets,
       readToken: async () => "token",
       fetchImplementation: async () => {
@@ -243,13 +325,12 @@ describe("loadAnthropicBuckets", () => {
     });
 
     expect(fetchCalled).to.equal(false);
-    expect(result).to.deep.equal({ buckets: lastGoodBuckets, attempted: false, error: null });
+    expect(result).to.deep.equal({ buckets: lastGoodBuckets, skipped: [], attempted: false, error: null });
   });
 
   it("attempts and returns fresh buckets on success", async () => {
     const result = await loadAnthropicBuckets({
-      now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastGoodBuckets: null,
       readToken: async () => "token",
       fetchImplementation: async () => jsonResponse(200, anthropicFixture),
@@ -258,12 +339,32 @@ describe("loadAnthropicBuckets", () => {
     expect(result.attempted).to.equal(true);
     expect(result.error).to.equal(null);
     expect(result.buckets).to.have.length(3);
+    expect(result.skipped).to.deep.equal([]);
+  });
+
+  it("feature: surfaces the reason for a limit the response could not be parsed into a bucket", async () => {
+    const bodyWithOneBadLimit = {
+      limits: [
+        { kind: "session", group: "session", percent: 23, resets_at: "2026-07-21T09:29:59.982Z", scope: null },
+        { kind: "weekly_all", group: "weekly", percent: "high", resets_at: "2026-07-27T19:59:59.982Z", scope: null },
+      ],
+    };
+
+    const result = await loadAnthropicBuckets({
+      skipFetch: false,
+      lastGoodBuckets: null,
+      readToken: async () => "token",
+      fetchImplementation: async () => jsonResponse(200, bodyWithOneBadLimit),
+    });
+
+    expect(result.error).to.equal(null);
+    expect(result.buckets).to.have.length(1);
+    expect(result.skipped).to.have.length(1);
   });
 
   it("invariant: last-good survives a token read failure, attempted is still true", async () => {
     const result = await loadAnthropicBuckets({
-      now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastGoodBuckets,
       readToken: async () => {
         throw new Error("Anthropic-Token nicht im Keychain gefunden");
@@ -273,13 +374,13 @@ describe("loadAnthropicBuckets", () => {
 
     expect(result.attempted).to.equal(true);
     expect(result.buckets).to.deep.equal(lastGoodBuckets);
+    expect(result.skipped).to.deep.equal([]);
     expect(result.error).to.be.instanceOf(Error);
   });
 
   it("invariant: last-good survives a fetch failure (e.g. 429), attempted is still true", async () => {
     const result = await loadAnthropicBuckets({
-      now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastGoodBuckets,
       readToken: async () => "token",
       fetchImplementation: async () => jsonResponse(429, {}),

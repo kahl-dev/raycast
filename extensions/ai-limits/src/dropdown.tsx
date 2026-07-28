@@ -39,6 +39,9 @@ function BucketRow({ bucket, severity, now }: { bucket: Bucket; severity: Severi
 export interface DropdownContentProps {
   anthropicBuckets: Bucket[];
   codexBuckets: Bucket[];
+  // One entry per Anthropic limit that failed to parse. Rendered so a partially degraded response
+  // is visible — an unrendered slot would otherwise look identical to an unused limit.
+  anthropicSkipped: string[];
   // Straight from the live codex.ts load result (the single command always fetches — see
   // anthropic.tsx) — null simply means this fetch reported no hint / no reset credits.
   codexHint: string | null;
@@ -69,6 +72,11 @@ export function DropdownContent(props: DropdownContentProps) {
             <BucketRow key={bucket.id} bucket={bucket} severity={severity} now={props.now} />
           ))
         )}
+        {/* Keyed by index, not by reason: two per-model limits failing the same way produce
+            byte-identical messages, and a duplicate key drops one of the rows. */}
+        {props.anthropicSkipped.map((reason, index) => (
+          <MenuBarExtra.Item key={index} title="Limit nicht lesbar" subtitle={reason} icon={Icon.Warning} />
+        ))}
       </MenuBarExtra.Section>
 
       <MenuBarExtra.Section title="OpenAI">

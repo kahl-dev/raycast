@@ -19,6 +19,8 @@ export const loadDependencies: LoadDependencies = {
     setLastGoodBuckets: cache.setLastGoodBuckets,
     getLastCodexResetCreditsAvailable: cache.getLastCodexResetCreditsAvailable,
     setLastCodexResetCreditsAvailable: cache.setLastCodexResetCreditsAvailable,
+    getLastAnthropicSkipped: cache.getLastAnthropicSkipped,
+    setLastAnthropicSkipped: cache.setLastAnthropicSkipped,
     getFiredAlertKeys: cache.getFiredAlertKeys,
     setFiredAlertKeys: cache.setFiredAlertKeys,
     getLastUpdatedAt: cache.getLastUpdatedAt,

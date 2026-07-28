@@ -166,11 +166,11 @@ export function shouldAttemptCodexLogin(lastAttemptAt: Date | null, now: Date): 
   return hasElapsed(lastAttemptAt, now, CODEX_LOGIN_COOLDOWN_MS);
 }
 
-// Cooldown-Gate für den Fetch selbst — mirrors isWithinAnthropicCooldown (anthropic.ts). The
-// menu-bar command's own 5-minute interval tick and a manual refresh can overlap — this gate
+// Cooldown-Prädikat für den Fetch selbst — mirrors isWithinAnthropicCooldown (anthropic.ts). The
+// menu-bar command's own interval tick and a manual refresh can overlap — this gate
 // collapses concurrent calls to at most one real network request per cooldown window. Separate
 // from CODEX_LOGIN_COOLDOWN_MS: this gate skips the network call entirely, the login debounce only
-// gates the `codex login status` retry after a 401.
+// gates the `codex login status` retry after a 401. The decision is made by loadUsageData (load.ts).
 export function isWithinCodexCooldown(lastAttemptAt: Date | null, now: Date): boolean {
   return !hasElapsed(lastAttemptAt, now, CODEX_COOLDOWN_MS);
 }
@@ -184,7 +184,9 @@ export function shouldShowRedeemHint(primaryBucket: Bucket | null): boolean {
 
 export interface CodexLoadDependencies {
   now: () => Date;
-  lastAttemptAt: Date | null;
+  // Decided by the caller (load.ts) via isWithinCodexCooldown, so that the gate check and the
+  // attempt-timestamp write happen together, before any await.
+  skipFetch: boolean;
   lastLoginAttemptAt: Date | null;
   lastGoodBuckets: Bucket[] | null;
   readAuth: () => Promise<CodexAuthTokens>;
@@ -206,13 +208,12 @@ export interface CodexLoadResult {
   resetCreditsAvailable: number | null;
 }
 
-// Timestamp wird vom Aufrufer bei JEDEM Versuch (attempted:true) persistiert — Erfolg UND Fehler —
-// damit ein wiederholt fehlschlagender Call den 60s-Cooldown trotzdem einhält. Das bestehende
-// 1h-Login-Retry-Debounce (shouldAttemptCodexLogin/lastLoginAttemptAt) bleibt davon unabhängig.
+// Das 1h-Login-Retry-Debounce (shouldAttemptCodexLogin/lastLoginAttemptAt) ist vom Fetch-Cooldown
+// unabhängig und wird weiterhin hier drin ausgewertet.
 export async function loadCodexBuckets(deps: CodexLoadDependencies): Promise<CodexLoadResult> {
   const now = deps.now();
 
-  if (isWithinCodexCooldown(deps.lastAttemptAt, now)) {
+  if (deps.skipFetch) {
     return {
       buckets: deps.lastGoodBuckets,
       attempted: false,

@@ -28,20 +28,22 @@ describe("pruneHistory", () => {
     expect(pruneHistory([stale, fresh], now)).to.deep.equal([fresh]);
   });
 
-  it("invariant: never exceeds 60 entries, keeping the most recent ones", () => {
-    const points = Array.from({ length: 70 }, (_unused, index) => ({
-      at: new Date(now.getTime() - (70 - index) * 1000),
+  it("invariant: never exceeds the entry cap, keeping the most recent ones", () => {
+    const overflow = 10;
+    const total = HISTORY_MAX_ENTRIES + overflow;
+    const points = Array.from({ length: total }, (_unused, index) => ({
+      at: new Date(now.getTime() - (total - index) * 1000),
       percent: index,
     }));
 
     const pruned = pruneHistory(points, now);
 
     expect(pruned).to.have.length(HISTORY_MAX_ENTRIES);
-    expect(pruned[0].percent).to.equal(10);
-    expect(pruned[pruned.length - 1].percent).to.equal(69);
+    expect(pruned[0].percent).to.equal(overflow);
+    expect(pruned[pruned.length - 1].percent).to.equal(total - 1);
   });
 
-  it("boundary: exactly 60 entries are all kept", () => {
+  it("boundary: exactly the cap's worth of entries are all kept", () => {
     const points = Array.from({ length: HISTORY_MAX_ENTRIES }, (_unused, index) => ({
       at: new Date(now.getTime() - (HISTORY_MAX_ENTRIES - index) * 1000),
       percent: index,
@@ -96,7 +98,7 @@ describe("appendHistory", () => {
     expect(appended).to.deep.equal([...existing, { at: now, percent: 10 }]);
   });
 
-  it("prunes while appending, so the ring never exceeds 60 entries or 48h", () => {
+  it("prunes while appending, so the ring never exceeds the entry cap or 48h", () => {
     const existing = Array.from({ length: HISTORY_MAX_ENTRIES }, (_unused, index) => ({
       at: new Date(now.getTime() - (HISTORY_MAX_ENTRIES - index) * 1000),
       percent: index,

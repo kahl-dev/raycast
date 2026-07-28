@@ -321,11 +321,11 @@ describe("loadCodexBuckets", () => {
   ];
   const auth = { accessToken: "codex-token", accountId: "acct-1" };
 
-  it("skips the network call within the codex cooldown and returns last-good", async () => {
+  it("skips the network call when skipFetch is set and returns last-good", async () => {
     let readAuthCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: new Date(now.getTime() - 1000),
+      skipFetch: true,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => {
@@ -352,7 +352,7 @@ describe("loadCodexBuckets", () => {
   it("returns fresh buckets on a clean success", async () => {
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastLoginAttemptAt: null,
       lastGoodBuckets: null,
       readAuth: async () => auth,
@@ -376,7 +376,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => {
@@ -401,7 +401,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => {
@@ -432,7 +432,7 @@ describe("loadCodexBuckets", () => {
   it("on 401 outside cooldown: retry still fails, falls back to last-good with a hint", async () => {
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => auth,
@@ -454,7 +454,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastLoginAttemptAt: new Date(now.getTime() - 1000),
       lastGoodBuckets,
       readAuth: async () => auth,
@@ -476,7 +476,7 @@ describe("loadCodexBuckets", () => {
     let loginCalled = false;
     const result = await loadCodexBuckets({
       now: () => now,
-      lastAttemptAt: null,
+      skipFetch: false,
       lastLoginAttemptAt: null,
       lastGoodBuckets,
       readAuth: async () => auth,

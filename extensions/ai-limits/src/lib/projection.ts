@@ -1,5 +1,9 @@
 export const HISTORY_MAX_AGE_MS = 48 * 60 * 60 * 1000;
-export const HISTORY_MAX_ENTRIES = 60;
+// Sized to exactly one session window at the command's poll interval: 120 × 150s = 18000s, the
+// same 5h as SESSION_WINDOW_SECONDS (anthropic.ts). The burn-rate projection reads oldest-vs-newest
+// across this ring, so the cap is what actually bounds the lookback — HISTORY_MAX_AGE_MS never
+// binds first. Re-derive this if the manifest's `interval` changes.
+export const HISTORY_MAX_ENTRIES = 120;
 
 const MINIMUM_PROJECTION_SPAN_MS = 30 * 60 * 1000;
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
@@ -53,7 +57,7 @@ export function serializeHistoryJson(history: HistoryPoint[]): string {
   return JSON.stringify(history.map((point) => ({ atIso: point.at.toISOString(), percent: point.percent })));
 }
 
-// Drops entries older than 48h and caps the ring at 60 entries (oldest dropped first) — keeps the
+// Drops entries older than 48h and caps the ring at HISTORY_MAX_ENTRIES (oldest dropped first) — keeps the
 // cached per-bucket history small without a separate GC job, mirroring pruneFiredKeys' self-cleaning
 // approach in thresholds.ts.
 export function pruneHistory(history: HistoryPoint[], now: Date): HistoryPoint[] {

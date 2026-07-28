@@ -13,7 +13,7 @@
       "title": "AI Limits",
       "description": "Anthropic- und OpenAI-Nutzungslimits (Session, Woche, höchstes Modell-Wochenlimit, OpenAI) live in der Menubar",
       "mode": "menu-bar",
-      "interval": "5m"
+      "interval": "150s"
     }
   ],
   "dependencies": {

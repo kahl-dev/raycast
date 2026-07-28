@@ -7,9 +7,7 @@ import {
   formatAlertMessage,
   formatResetMessage,
   markAlertsFired,
-  markResetEventsFired,
   pruneFiredKeys,
-  resetEventKey,
 } from "./thresholds";
 import { bucket as baseBucket } from "./__fixtures__/bucket";
 import { Bucket } from "./types";
@@ -125,28 +123,14 @@ describe("pruneFiredKeys", () => {
     expect(pruneFiredKeys(fired, [])).to.deep.equal(new Set());
   });
 
-  it("keeps a reset key while the bucket stays empty (percent below WARNING)", () => {
+  it("drops a stale key left over from an older key format", () => {
+    // Reset events no longer use firedAlertKeys at all (they are derived from a percent drop, which
+    // cannot repeat for the same reset). Any leftover reset: key from an older build is simply not
+    // retained, because it matches no alert key of any current bucket.
     const b = bucket({ percent: 5 });
-    const fired = new Set([resetEventKey(b.id)]);
-
-    expect(pruneFiredKeys(fired, [b])).to.deep.equal(new Set([resetEventKey(b.id)]));
-  });
-
-  it("re-arms (drops) a reset key once percent climbs back to WARNING", () => {
-    const b = bucket({ percent: 80 });
-    const fired = new Set([resetEventKey(b.id)]);
+    const fired = new Set(["reset:" + b.id]);
 
     expect(pruneFiredKeys(fired, [b])).to.deep.equal(new Set());
-  });
-
-  it("keeps both an alert key and a reset key side by side in the overlap band", () => {
-    // percent 77 sits in the narrow band where both apply: 77 >= 80 - 5 keeps the 80 alert suppressed,
-    // and 77 < 80 keeps the reset key set. Below 75 only the reset key would remain; at/above 80 only
-    // the alert key.
-    const b = bucket({ percent: 77 });
-    const fired = new Set([alertKey(b.id, 80), resetEventKey(b.id)]);
-
-    expect(pruneFiredKeys(fired, [b])).to.deep.equal(new Set([alertKey(b.id, 80), resetEventKey(b.id)]));
   });
 });
 
@@ -159,53 +143,58 @@ describe("formatAlertMessage", () => {
   });
 });
 
-describe("resetEventKey", () => {
-  it("uses a distinct reset: prefix, distinguishing it from alertKey", () => {
-    expect(resetEventKey("anthropic:weekly_scoped:fable")).to.equal("reset:anthropic:weekly_scoped:fable");
-  });
-});
-
 describe("determineResetEvents", () => {
-  it("fires when a bucket that was >=80 percent drops back to meaningful headroom", () => {
-    const previous = bucket({ percent: 85 });
-    const current = bucket({ percent: 5 });
+  it("fires on a full window rollover", () => {
+    const previous = bucket({ percent: 100 });
+    const current = bucket({ percent: 6 });
 
     expect(determineResetEvents([previous], [current])).to.deep.equal([{ bucket: current }]);
   });
 
-  it("boundary: fires at exactly 80 percent previously (the WARNING_THRESHOLD)", () => {
-    const previous = bucket({ percent: 80 });
-    const current = bucket({ percent: 5 });
+  it("feature: fires on a mid-window reset granted well below the warning threshold", () => {
+    // The case the old previous>=80 rule silently swallowed: Anthropic hands out a goodwill reset
+    // while usage sits at 50%, which is exactly the event worth being told about.
+    const previous = bucket({ percent: 50 });
+    const current = bucket({ percent: 0 });
 
     expect(determineResetEvents([previous], [current])).to.deep.equal([{ bucket: current }]);
   });
 
-  it("does not fire when the previous percent was below 80", () => {
-    const previous = bucket({ percent: 79 });
-    const current = bucket({ percent: 5 });
+  it("boundary: fires at exactly the 10-point drop", () => {
+    const previous = bucket({ percent: 30 });
+    const current = bucket({ percent: 20 });
+
+    expect(determineResetEvents([previous], [current])).to.deep.equal([{ bucket: current }]);
+  });
+
+  it("boundary: stays silent one point short of the drop threshold", () => {
+    const previous = bucket({ percent: 30 });
+    const current = bucket({ percent: 21 });
 
     expect(determineResetEvents([previous], [current])).to.deep.equal([]);
   });
 
-  it("does not fire when percent stays high (no real headroom returned, only resetsAt drift)", () => {
+  it("does not fire while usage climbs", () => {
+    const previous = bucket({ percent: 90 });
+    const current = bucket({ percent: 91 });
+
+    expect(determineResetEvents([previous], [current])).to.deep.equal([]);
+  });
+
+  it("does not fire on an unchanged percent, even when resetsAt drifts", () => {
     const previous = bucket({ percent: 90, resetsAt: new Date("2026-07-20T22:00:00.000Z") });
-    const current = bucket({ percent: 91, resetsAt: new Date("2026-07-27T22:00:00.000Z") });
+    const current = bucket({ percent: 90, resetsAt: new Date("2026-07-27T22:00:00.000Z") });
 
     expect(determineResetEvents([previous], [current])).to.deep.equal([]);
   });
 
-  it("boundary: does not fire when current percent sits exactly at WARNING minus hysteresis", () => {
-    const previous = bucket({ percent: 90 });
-    const current = bucket({ percent: 75 });
+  it("invariant: the same reset cannot fire twice, because the post-reset value becomes the baseline", () => {
+    const beforeReset = bucket({ percent: 100 });
+    const afterReset = bucket({ percent: 6 });
 
-    expect(determineResetEvents([previous], [current])).to.deep.equal([]);
-  });
-
-  it("boundary: fires when current percent is one point inside the hysteresis band", () => {
-    const previous = bucket({ percent: 90 });
-    const current = bucket({ percent: 74 });
-
-    expect(determineResetEvents([previous], [current])).to.deep.equal([{ bucket: current }]);
+    expect(determineResetEvents([beforeReset], [afterReset])).to.have.length(1);
+    // Next tick compares the already-reset value against the next observation — no second drop.
+    expect(determineResetEvents([afterReset], [bucket({ percent: 8 })])).to.deep.equal([]);
   });
 
   it("does not fire for a bucket with no previous entry (first-ever load)", () => {
@@ -225,17 +214,6 @@ describe("determineResetEvents", () => {
     const current = bucket({ id: "openai:primary", provider: "openai", percent: 0 });
 
     expect(determineResetEvents([previous], [current])).to.deep.equal([{ bucket: current }]);
-  });
-});
-
-describe("markResetEventsFired", () => {
-  it("adds reset-prefixed keys without dropping existing ones", () => {
-    const current = bucket({});
-    const existing = new Set(["some:other:key:80"]);
-
-    const next = markResetEventsFired(existing, [{ bucket: current }]);
-
-    expect(next).to.deep.equal(new Set(["some:other:key:80", resetEventKey(current.id)]));
   });
 });
 

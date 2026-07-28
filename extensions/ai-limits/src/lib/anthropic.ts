@@ -77,6 +77,48 @@ function parseResetsAt(kind: string, resetsAt: unknown): Date {
   return date;
 }
 
+// Limits are grouped ("session", "weekly") and every limit in a group shares that group's window
+// boundary. `group` is optional in the payload; `kind` is the fallback key so a limit that omits it
+// still lands in its own bucket rather than colliding with unrelated ones.
+function groupKey(raw: RawAnthropicLimit): string {
+  return typeof raw.group === "string" && raw.group.length > 0 ? raw.group : raw.kind;
+}
+
+// The API reports resets_at:null for a limit with no window open — a per-model weekly limit only
+// materializes once that model is actually used, so at 0% there is no reset time to report. Every
+// observed response has the scoped weekly limit sharing the all-models weekly boundary, so the
+// group's anchor is the right substitute. Without this the null propagates into a thrown parse.
+function collectGroupResetAnchors(limits: RawAnthropicLimit[]): Map<string, Date> {
+  const anchors = new Map<string, Date>();
+  for (const raw of limits) {
+    const key = groupKey(raw);
+    if (anchors.has(key) || typeof raw.resets_at !== "string") {
+      continue;
+    }
+    const date = new Date(raw.resets_at);
+    if (!Number.isNaN(date.getTime())) {
+      anchors.set(key, date);
+    }
+  }
+  return anchors;
+}
+
+// A missing resets_at falls back to the group anchor; anything else (including a malformed string)
+// stays a hard parse error for this one limit — callers isolate it, see parseAnthropicUsage.
+function resolveResetsAt(raw: RawAnthropicLimit, anchors: Map<string, Date>): Date {
+  if (raw.resets_at !== null && raw.resets_at !== undefined) {
+    return parseResetsAt(raw.kind, raw.resets_at);
+  }
+
+  const anchor = anchors.get(groupKey(raw));
+  if (anchor === undefined) {
+    throw new Error(
+      `Anthropic-Limit "${raw.kind}" hat kein resets_at und seine Gruppe "${groupKey(raw)}" enthält kein Limit mit Reset-Zeitpunkt`,
+    );
+  }
+  return anchor;
+}
+
 // Rein datenbasierte Label-Sonderfälle; nur weekly_scoped braucht echte Struktur-Logik (liest scope).
 // "session" fehlt bewusst: humanizeKind("session") ergibt bereits "Session".
 const KIND_LABEL_OVERRIDES: Record<string, string> = {
@@ -107,9 +149,9 @@ function makeAnthropicBucket(
 // Rendert limits[] generisch — NICHT nach is_active filtern. In der verifizierten Response
 // haben weekly_all und weekly_scoped (Fable) is_active:false, die Claude-App zeigt sie trotzdem.
 // is_active markiert nur "das gerade bindende Limit", nicht "Enforcement" — alle Einträge zählen.
-function buildBucketFromRawLimit(raw: RawAnthropicLimit): Bucket {
+function buildBucketFromRawLimit(raw: RawAnthropicLimit, anchors: Map<string, Date>): Bucket {
   const percent = parsePercent(raw.kind, raw.percent);
-  const resetsAt = parseResetsAt(raw.kind, raw.resets_at);
+  const resetsAt = resolveResetsAt(raw, anchors);
   const windowSeconds = windowSecondsForRawLimit(raw);
 
   if (raw.kind === "weekly_scoped") {
@@ -136,12 +178,37 @@ function buildLegacyBucket(id: string, label: string, raw: RawAnthropicLegacyLim
   );
 }
 
-export function parseAnthropicUsage(json: unknown): Bucket[] {
+export interface AnthropicUsageParseResult {
+  buckets: Bucket[];
+  // Human-readable reason per limit that could not be turned into a bucket. Surfaced in the
+  // dropdown so a degraded parse is visible instead of looking like "that limit is just unused".
+  skipped: string[];
+}
+
+// Collects buckets one limit at a time, isolating failures. A single unparseable entry must not
+// cost the whole response: the API shipping resets_at:null on one limit silently froze all four
+// menu-bar slots on last-good data for days (2026-07-27), because one throw discarded everything.
+function collectBuckets(builders: Array<() => Bucket>): AnthropicUsageParseResult {
+  const buckets: Bucket[] = [];
+  const skipped: string[] = [];
+  for (const build of builders) {
+    try {
+      buckets.push(build());
+    } catch (error) {
+      skipped.push(toError(error).message);
+    }
+  }
+  return { buckets, skipped };
+}
+
+export function parseAnthropicUsage(json: unknown): AnthropicUsageParseResult {
   assertJsonObject(json, "Anthropic-Usage-Antwort");
   const response = json as RawAnthropicUsageResponse;
 
   if (Array.isArray(response.limits)) {
-    return response.limits.map(buildBucketFromRawLimit);
+    const limits = response.limits;
+    const anchors = collectGroupResetAnchors(limits);
+    return collectBuckets(limits.map((raw) => () => buildBucketFromRawLimit(raw, anchors)));
   }
 
   if (response.limits !== undefined && response.limits !== null) {
@@ -149,20 +216,22 @@ export function parseAnthropicUsage(json: unknown): Bucket[] {
   }
 
   // Fallback auf Legacy-Felder nur wenn limits[] komplett fehlt (undefined/null).
-  const buckets: Bucket[] = [];
-  if (response.five_hour) {
-    buckets.push(buildLegacyBucket("anthropic:session", "Session", response.five_hour, SESSION_WINDOW_SECONDS));
+  const builders: Array<() => Bucket> = [];
+  const fiveHour = response.five_hour;
+  if (fiveHour) {
+    builders.push(() => buildLegacyBucket("anthropic:session", "Session", fiveHour, SESSION_WINDOW_SECONDS));
   }
-  if (response.seven_day) {
-    buckets.push(buildLegacyBucket("anthropic:weekly_all", "Woche", response.seven_day, WEEKLY_WINDOW_SECONDS));
+  const sevenDay = response.seven_day;
+  if (sevenDay) {
+    builders.push(() => buildLegacyBucket("anthropic:weekly_all", "Woche", sevenDay, WEEKLY_WINDOW_SECONDS));
   }
-  return buckets;
+  return collectBuckets(builders);
 }
 
 export async function fetchAnthropicUsage(
   token: string,
   fetchImplementation: FetchFunction = fetch,
-): Promise<Bucket[]> {
+): Promise<AnthropicUsageParseResult> {
   const response = await fetchImplementation(USAGE_URL, {
     headers: {
       authorization: `Bearer ${token}`,
@@ -179,16 +248,18 @@ export async function fetchAnthropicUsage(
   return parseAnthropicUsage(json);
 }
 
-// Cooldown-Gate für den Fetch selbst: useCachedPromise re-executed bei jedem Dropdown-Öffnen
+// Cooldown-Prädikat für den Fetch: useCachedPromise re-executed bei jedem Dropdown-Öffnen
 // (stale-while-revalidate, kein eingebautes Dedupe) — ohne dieses Gate würde der eng gedrosselte
-// Endpoint (~1 req/min) bei schnellem wiederholtem Öffnen sofort 429en.
+// Endpoint (~1 req/min) bei schnellem wiederholtem Öffnen sofort 429en. Die Entscheidung selbst
+// trifft loadUsageData (load.ts), damit sie zusammen mit dem Timestamp-Write vor dem Await liegt.
 export function isWithinAnthropicCooldown(lastAttemptAt: Date | null, now: Date): boolean {
   return !hasElapsed(lastAttemptAt, now, ANTHROPIC_COOLDOWN_MS);
 }
 
 export interface AnthropicLoadDependencies {
-  now: () => Date;
-  lastAttemptAt: Date | null;
+  // Decided by the caller (load.ts) via isWithinAnthropicCooldown, so that the gate check and the
+  // attempt-timestamp write happen together, before any await.
+  skipFetch: boolean;
   lastGoodBuckets: Bucket[] | null;
   readToken: () => Promise<string>;
   fetchImplementation: FetchFunction;
@@ -196,27 +267,24 @@ export interface AnthropicLoadDependencies {
 
 export interface AnthropicLoadResult {
   buckets: Bucket[] | null;
-  // false means the network call was skipped by the cooldown gate — check isWithinAnthropicCooldown
-  // separately if that distinction matters; callers only need this to know whether to persist a
-  // new lastAttemptAt timestamp.
+  // Limits the API returned that could not be parsed. Only ever populated by a fresh successful
+  // fetch — a cooldown-skip or a failure reports none, since neither produced a fresh parse.
+  skipped: string[];
+  // false means the network call was skipped by the cooldown gate.
   attempted: boolean;
   error: Error | null;
 }
 
-// Timestamp wird vom Aufrufer bei JEDEM Versuch (attempted:true) persistiert — Erfolg UND Fehler —
-// damit ein wiederholt fehlschlagender Call den 60s-Cooldown trotzdem einhält.
 export async function loadAnthropicBuckets(deps: AnthropicLoadDependencies): Promise<AnthropicLoadResult> {
-  const now = deps.now();
-
-  if (isWithinAnthropicCooldown(deps.lastAttemptAt, now)) {
-    return { buckets: deps.lastGoodBuckets, attempted: false, error: null };
+  if (deps.skipFetch) {
+    return { buckets: deps.lastGoodBuckets, skipped: [], attempted: false, error: null };
   }
 
   try {
     const token = await deps.readToken();
-    const buckets = await fetchAnthropicUsage(token, deps.fetchImplementation);
-    return { buckets, attempted: true, error: null };
+    const usage = await fetchAnthropicUsage(token, deps.fetchImplementation);
+    return { buckets: usage.buckets, skipped: usage.skipped, attempted: true, error: null };
   } catch (error) {
-    return { buckets: deps.lastGoodBuckets, attempted: true, error: toError(error) };
+    return { buckets: deps.lastGoodBuckets, skipped: [], attempted: true, error: toError(error) };
   }
 }

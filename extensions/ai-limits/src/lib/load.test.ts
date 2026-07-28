@@ -17,6 +17,7 @@ interface FakeCacheStore {
   lastUpdatedAt: Date | null;
   bucketHistory: Record<string, HistoryPoint[]>;
   lastCodexResetCreditsAvailable: number | null;
+  lastAnthropicSkipped: string[];
 }
 
 // Map-backed in-memory fake — no module mocking. The `vi.fn` wrapper keeps the fake introspectable
@@ -33,6 +34,7 @@ function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDepend
     lastUpdatedAt: null,
     bucketHistory: {},
     lastCodexResetCreditsAvailable: null,
+    lastAnthropicSkipped: [],
     ...initial,
   };
 
@@ -75,6 +77,23 @@ function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDepend
     setLastCodexResetCreditsAvailable: vi.fn((value: number | null): void => {
       store.lastCodexResetCreditsAvailable = value;
     }),
+    getLastAnthropicSkipped: vi.fn((): string[] => store.lastAnthropicSkipped),
+    setLastAnthropicSkipped: vi.fn((reasons: string[]): void => {
+      store.lastAnthropicSkipped = reasons;
+    }),
+  };
+}
+
+// Anthropic body whose one limit cannot be parsed (percent shipped as a string).
+const unreadableAnthropicBody = {
+  limits: [{ kind: "session", group: "session", percent: "61", resets_at: "2026-07-28T11:50:00.000Z", scope: null }],
+};
+
+function anthropicBody(kind: string, percent: number) {
+  return {
+    limits: [
+      { kind, group: kind === "session" ? "session" : "weekly", percent, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
+    ],
   };
 }
 
@@ -107,6 +126,7 @@ describe("loadUsageData", () => {
     expect(result).to.deep.equal({
       anthropicBuckets: [],
       codexBuckets: [],
+      anthropicSkipped: [],
       codexHint: "Codex-Login nicht gefunden",
       codexResetCreditsAvailable: null,
       lastUpdatedAt: now,
@@ -358,6 +378,277 @@ describe("loadUsageData", () => {
     expect(cache.setLastCodexAttemptAt).not.toHaveBeenCalled();
   });
 
+  it("regression: two concurrent loads produce a single anthropic fetch and a single history point", async () => {
+    // The gate used to check lastAttemptAt and write it only after the fetch resolved. Two renders
+    // of the same menu-bar command start milliseconds apart, so both read the stale timestamp, both
+    // passed the gate and both hit an endpoint that allows ~1 req/min — visible in the live cache as
+    // history points in pairs ~5ms apart.
+    const now = new Date("2026-07-21T09:00:00.000Z");
+    const cache = createFakeCache();
+    let anthropicFetches = 0;
+    const deps = {
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () => {
+        anthropicFetches += 1;
+        return jsonResponse(200, {
+          limits: [
+            { kind: "weekly_all", group: "weekly", percent: 5, resets_at: "2026-07-27T19:59:59.982Z", scope: null },
+          ],
+        });
+      },
+      notify: vi.fn(async (): Promise<void> => {}),
+    };
+
+    await Promise.all([loadUsageData(deps), loadUsageData(deps)]);
+
+    expect(anthropicFetches).to.equal(1);
+    expect(cache.setBucketHistory).toHaveBeenCalledWith("anthropic:weekly_all", [{ at: now, percent: 5 }]);
+  });
+
+  it("feature: force bypasses the cooldown gate so a manual refresh actually re-fetches", async () => {
+    // Opening the menu already runs a load and writes both attempt timestamps, so the refresh
+    // action always lands inside the 60s window — without force it is a guaranteed no-op.
+    const now = new Date("2026-07-21T09:00:00.000Z");
+    const cache = createFakeCache({ lastAnthropicAttemptAt: now });
+    const readToken = vi.fn(async () => "token");
+
+    const result = await loadUsageData(
+      {
+        now: () => now,
+        cache,
+        readToken,
+        readAuth: async () => {
+          throw new Error("Codex-Auth-Datei nicht lesbar");
+        },
+        runLoginStatus: async () => {
+          throw new Error("should not be called — readAuth already failed");
+        },
+        fetchImplementation: async () =>
+          jsonResponse(200, {
+            limits: [
+              { kind: "weekly_all", group: "weekly", percent: 7, resets_at: "2026-07-27T19:59:59.982Z", scope: null },
+            ],
+          }),
+        notify: vi.fn(async (): Promise<void> => {}),
+      },
+      { force: true },
+    );
+
+    expect(readToken).toHaveBeenCalledTimes(1);
+    expect(result.anthropicBuckets.map((b) => b.percent)).to.deep.equal([7]);
+  });
+
+  it("feature: a weekly_scoped limit reported without resets_at survives the whole pipeline", async () => {
+    // The live failure: Anthropic reports resets_at:null on the per-model weekly limit once it is
+    // unused, which used to throw and discard every Anthropic bucket, freezing the menu bar on
+    // last-good data until that model was used again.
+    const now = new Date("2026-07-28T07:00:00.000Z");
+    const cache = createFakeCache();
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () =>
+        jsonResponse(200, {
+          limits: [
+            { kind: "session", group: "session", percent: 2, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
+            { kind: "weekly_all", group: "weekly", percent: 0, resets_at: "2026-08-03T20:00:00.000Z", scope: null },
+            {
+              kind: "weekly_scoped",
+              group: "weekly",
+              percent: 0,
+              resets_at: null,
+              scope: { model: { id: null, display_name: "Fable" }, surface: null },
+            },
+          ],
+        }),
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    expect(result.anthropicStale).to.equal(false);
+    expect(result.anthropicSkipped).to.deep.equal([]);
+    expect(result.anthropicBuckets.map((b) => b.id)).to.deep.equal([
+      "anthropic:session",
+      "anthropic:weekly_all",
+      "anthropic:weekly_scoped:fable",
+    ]);
+    expect(result.anthropicBuckets[2].resetsAt.toISOString()).to.equal("2026-08-03T20:00:00.000Z");
+  });
+
+  it("failure: an unreadable response keeps last-good intact and reports the data as stale", async () => {
+    // Per-limit isolation must not turn "the API sent something we cannot read" into "we have no
+    // data and everything is fine" — that silently destroys the cache and drops the veraltet marker.
+    const now = new Date("2026-07-28T11:00:00.000Z");
+    const lastGoodAnthropicBuckets: Bucket[] = [bucket({ id: "anthropic:session", percent: 61 })];
+    const cache = createFakeCache({ lastGoodAnthropicBuckets });
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () => jsonResponse(200, unreadableAnthropicBody),
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    expect(result.anthropicBuckets.map((b) => b.percent)).to.deep.equal([61]);
+    expect(result.anthropicStale).to.equal(true);
+    expect(result.anthropicSkipped).to.have.length(1);
+    expect(cache.setLastGoodBuckets).not.toHaveBeenCalledWith("anthropic", []);
+  });
+
+  it("failure: a partially unreadable response carries the last-good value for the failed limit only", async () => {
+    const now = new Date("2026-07-28T11:00:00.000Z");
+    const lastGoodAnthropicBuckets: Bucket[] = [
+      bucket({ id: "anthropic:session", percent: 61 }),
+      bucket({ id: "anthropic:weekly_all", percent: 44 }),
+    ];
+    const cache = createFakeCache({ lastGoodAnthropicBuckets });
+
+    const result = await loadUsageData({
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () =>
+        jsonResponse(200, {
+          limits: [
+            { kind: "session", group: "session", percent: 5, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
+            { kind: "weekly_all", group: "weekly", percent: "44", resets_at: "2026-08-03T20:00:00.000Z", scope: null },
+          ],
+        }),
+      notify: vi.fn(async (): Promise<void> => {}),
+    });
+
+    const byId = new Map(result.anthropicBuckets.map((b) => [b.id, b.percent]));
+    expect(byId.get("anthropic:session")).to.equal(5); // fresh
+    expect(byId.get("anthropic:weekly_all")).to.equal(44); // carried over
+    expect(result.anthropicStale).to.equal(true);
+    // Only the freshly observed bucket gets a history point — a carried-over value is not a new
+    // measurement and would flatten the burn-rate slope.
+    expect(cache.setBucketHistory).toHaveBeenCalledWith("anthropic:session", [{ at: now, percent: 5 }]);
+    expect(cache.setBucketHistory).not.toHaveBeenCalledWith("anthropic:weekly_all", [{ at: now, percent: 44 }]);
+  });
+
+  it("invariant: a one-tick parse failure does not re-arm alerts that already fired", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn(async (): Promise<void> => {});
+    const baseDeps = {
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      notify,
+    };
+
+    await loadUsageData({
+      ...baseDeps,
+      now: () => new Date("2026-07-28T11:00:00.000Z"),
+      fetchImplementation: async () => jsonResponse(200, anthropicBody("session", 96)),
+    });
+    expect(notify).toHaveBeenCalledTimes(2); // 80 and 95
+
+    // Degraded tick: the limit vanishes from the fresh parse.
+    notify.mockClear();
+    await loadUsageData({
+      ...baseDeps,
+      now: () => new Date("2026-07-28T11:02:00.000Z"),
+      fetchImplementation: async () => jsonResponse(200, unreadableAnthropicBody),
+    });
+    expect(notify).not.toHaveBeenCalled();
+
+    // Recovered tick at the same 96% — the alerts must still be suppressed.
+    await loadUsageData({
+      ...baseDeps,
+      now: () => new Date("2026-07-28T11:04:00.000Z"),
+      fetchImplementation: async () => jsonResponse(200, anthropicBody("session", 96)),
+    });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("feature: the skipped-limit reasons survive a cooldown-skipped render", async () => {
+    const cache = createFakeCache();
+    const baseDeps = {
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () => jsonResponse(200, unreadableAnthropicBody),
+      notify: vi.fn(async (): Promise<void> => {}),
+    };
+
+    const fetched = await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-28T11:00:00.000Z") });
+    expect(fetched.anthropicSkipped).to.have.length(1);
+
+    // Menu reopened 20s later — inside the 60s gate, so no fetch and no fresh parse.
+    const skipped = await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-28T11:00:20.000Z") });
+    expect(skipped.anthropicSkipped).to.deep.equal(fetched.anthropicSkipped);
+  });
+
+  it("regression: a forced refresh racing an in-flight load reports the reset only once", async () => {
+    // force bypasses the gate that otherwise collapses concurrent loads, so both calls would
+    // otherwise diff against the same pre-fetch baseline and both announce the same reset.
+    const now = new Date("2026-07-28T11:00:00.000Z");
+    const cache = createFakeCache({
+      lastGoodAnthropicBuckets: [bucket({ id: "anthropic:session", percent: 90 })],
+    });
+    const notify = vi.fn(async (title: string, message: string): Promise<void> => {
+      void title;
+      void message;
+    });
+    const deps = {
+      now: () => now,
+      cache,
+      readToken: async () => "token",
+      readAuth: async () => {
+        throw new Error("Codex-Auth-Datei nicht lesbar");
+      },
+      runLoginStatus: async () => {
+        throw new Error("should not be called — readAuth already failed");
+      },
+      fetchImplementation: async () => jsonResponse(200, anthropicBody("session", 2)),
+      notify,
+    };
+
+    await Promise.all([loadUsageData(deps), loadUsageData(deps, { force: true })]);
+
+    const resetCalls = notify.mock.calls.filter(([, message]) => message.includes("resettet"));
+    expect(resetCalls).to.have.length(1);
+  });
+
   it("invariant: a bucket at 100% fires the 80 and 95 alerts exactly once; a repeat call with the same state fires nothing", async () => {
     const now = new Date("2026-07-21T09:00:00.000Z");
     const cache = createFakeCache();
@@ -473,8 +764,10 @@ describe("loadUsageData", () => {
     expect(result.anthropicBuckets[0].resetsAt).to.deep.equal(freshResetsAt);
   });
 
-  it("invariant: a reset notification fires exactly once per (bucket id, new resetsAt) — a repeat call with the same window does not refire", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
+  it("invariant: a reset notification fires once, and the next genuine re-fetch of the same state stays silent", async () => {
+    // The second load runs 61s later, past the cooldown gate, so it actually re-fetches and
+    // re-diffs. With the same `now` it would be a cooldown skip and this would assert nothing —
+    // the gate, not the invariant, would be carrying the test.
     const staleResetsAt = new Date("2026-07-14T19:59:59.982Z");
     const freshResetsAt = new Date("2026-07-27T19:59:59.982Z");
     const previousBucket = bucket({
@@ -491,8 +784,7 @@ describe("loadUsageData", () => {
         { kind: "weekly_all", group: "weekly", percent: 5, resets_at: freshResetsAt.toISOString(), scope: null },
       ],
     };
-    const deps = {
-      now: () => now,
+    const baseDeps = {
       cache,
       readToken: async () => "token",
       readAuth: async () => {
@@ -505,11 +797,11 @@ describe("loadUsageData", () => {
       notify,
     };
 
-    await loadUsageData(deps);
+    await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-21T09:00:00.000Z") });
     expect(notify).toHaveBeenCalledTimes(1);
 
     notify.mockClear();
-    await loadUsageData(deps);
+    await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-21T09:01:01.000Z") });
     expect(notify).not.toHaveBeenCalled();
   });
 

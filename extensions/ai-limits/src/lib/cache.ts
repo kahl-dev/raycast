@@ -15,6 +15,7 @@ const CACHE_KEYS = {
   firedAlertKeys: "firedAlertKeys",
   lastUpdatedAt: "lastUpdatedAt",
   lastCodexResetCreditsAvailable: "lastCodexResetCreditsAvailable",
+  lastAnthropicSkipped: "lastAnthropicSkipped",
 } as const;
 
 function getDate(key: string): Date | null {
@@ -75,6 +76,19 @@ export function getLastCodexResetCreditsAvailable(): number | null {
 
 export function setLastCodexResetCreditsAvailable(value: number | null): void {
   cache.set(CACHE_KEYS.lastCodexResetCreditsAvailable, JSON.stringify(value));
+}
+
+// Persisted for the same reason as the reset-credits value above: a cooldown-skipped or failed load
+// produces no fresh parse, so without a fallback the dropdown's "Limit nicht lesbar" row would
+// vanish while the degraded bucket stays degraded — which is exactly the silent failure the row
+// exists to prevent (roughly 40% of menu opens land inside the cooldown gate).
+export function getLastAnthropicSkipped(): string[] {
+  const stored = cache.get(CACHE_KEYS.lastAnthropicSkipped);
+  return stored === undefined ? [] : (JSON.parse(stored) as string[]);
+}
+
+export function setLastAnthropicSkipped(reasons: string[]): void {
+  cache.set(CACHE_KEYS.lastAnthropicSkipped, JSON.stringify(reasons));
 }
 
 function serializeBuckets(buckets: Bucket[]): string {
