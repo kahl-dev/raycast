@@ -11,26 +11,34 @@
     {
       "name": "switch-output",
       "title": "Switch Audio Output",
+      "subtitle": "Audio Switcher",
       "description": "List and switch between audio output devices",
-      "mode": "view"
+      "mode": "view",
+      "keywords": ["audio", "sound", "ton", "output", "speaker", "lautsprecher", "headphones", "kopfhoerer"]
     },
     {
       "name": "switch-input",
       "title": "Switch Input Device",
+      "subtitle": "Audio Switcher",
       "description": "List and switch between audio input devices",
-      "mode": "view"
+      "mode": "view",
+      "keywords": ["audio", "sound", "ton", "input", "mic", "mikrofon", "microphone"]
     },
     {
       "name": "toggle-mic-mute",
       "title": "Toggle Mic Mute",
+      "subtitle": "Audio Switcher",
       "description": "Toggle mute on the Wave:3 mic (falls back to the current input)",
-      "mode": "no-view"
+      "mode": "no-view",
+      "keywords": ["audio", "sound", "mic", "mikro", "mikrofon", "mute", "stumm"]
     },
     {
       "name": "toggle-automation",
       "title": "Toggle Audio Automation",
+      "subtitle": "Audio Switcher",
       "description": "Pause or resume the audio daemon's automatic switching",
-      "mode": "no-view"
+      "mode": "no-view",
+      "keywords": ["audio", "sound", "automation", "automatik", "pause", "daemon"]
     }
   ],
   "dependencies": {
