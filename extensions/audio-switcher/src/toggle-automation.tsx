@@ -2,11 +2,16 @@ import { showHUD } from "@raycast/api";
 import { toggleAutomation } from "./util/hammerspoon";
 
 export default async function Command() {
-  const state = await toggleAutomation();
-  if (state === null) {
-    // No daemon (undocked) — there is no automation to pause; nothing to toggle.
-    await showHUD("Audio daemon not running (undocked)");
+  const result = await toggleAutomation();
+  if (result === null) {
+    // null = Hammerspoon unreachable (see runHs) — the toggle itself works undocked.
+    await showHUD("Hammerspoon unreachable");
     return;
   }
-  await showHUD(state === "PAUSED" ? "⏸️ Audio automation paused" : "▶️ Audio automation active");
+  const { state, docked } = result;
+  if (state === "PAUSED") {
+    await showHUD(docked ? "⏸️ Audio automation paused" : "⏸️ Paused — applies at next dock");
+  } else {
+    await showHUD(docked ? "▶️ Audio automation active" : "▶️ Active — applies at next dock");
+  }
 }

@@ -7,13 +7,14 @@ import { AudioDeviceManager } from "./audio-devices";
 import { macOSPlatform } from "./platform-macos";
 import { BluetoothManager } from "./bluetooth";
 import { macOSBluetoothAdapter } from "./bluetooth-macos";
-import { loadConfig } from "./config";
+import { loadConfig, type LoadedAudioManagerConfig } from "./config";
 import { updateDevicePriority, toggleDeviceHidden } from "./config-actions";
 import { enrichDevices } from "./enriched-devices";
-import { notePick } from "./util/hammerspoon";
+import { notePick, revertPick, followOutputPriority } from "./util/hammerspoon";
+import { performSwitch } from "./switch-flow";
 import { useAutomationPaused, pausedNavigationTitle } from "./automation-status";
 import { TRANSPORT_LABELS, TRANSPORT_ICONS } from "./transport";
-import type { EnrichedDevice, AudioManagerConfig } from "./types";
+import type { EnrichedDevice } from "./types";
 
 const manager = new AudioDeviceManager(macOSPlatform);
 const bluetooth = new BluetoothManager(macOSBluetoothAdapter);
@@ -36,7 +37,7 @@ function getDeviceIcon(device: EnrichedDevice, isActive: boolean): Image.ImageLi
   };
 }
 
-function readConfig(): AudioManagerConfig {
+function readConfig(): LoadedAudioManagerConfig {
   try {
     const raw = readFileSync(CONFIG_PATH, "utf-8");
     return loadConfig(raw);
@@ -45,7 +46,7 @@ function readConfig(): AudioManagerConfig {
   }
 }
 
-function saveConfig(updated: AudioManagerConfig): void {
+function saveConfig(updated: LoadedAudioManagerConfig): void {
   try {
     writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2) + "\n", "utf-8");
   } catch {
@@ -59,12 +60,16 @@ async function applySwitch(
   label: string,
   stayOpen: boolean,
 ): Promise<boolean> {
-  const success = await manager.switchToDevice(deviceId);
+  const success = await performSwitch(
+    {
+      notePick: (name) => notePick("output", name),
+      revertPick: () => revertPick("output"),
+      switchToDevice: (id) => manager.switchToDevice(id),
+    },
+    deviceId,
+    deviceName,
+  );
   if (success) {
-    // Record intent only AFTER a confirmed switch, so a failed switch leaves no sacred-pick
-    // residue in the daemon (which would otherwise "restore" onto a device the user was told
-    // failed). The daemon's evaluation is debounced (>=0.5s), so this still lands before it runs.
-    await notePick("output", deviceName);
     await showToast({ style: Toast.Style.Success, title: label });
     if (!stayOpen) {
       popToRoot();
@@ -79,7 +84,7 @@ export default function SwitchOutput() {
   const [devices, setDevices] = useState<EnrichedDevice[]>([]);
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [config, setConfig] = useState<AudioManagerConfig>(readConfig);
+  const [config, setConfig] = useState<LoadedAudioManagerConfig>(readConfig);
   const paused = useAutomationPaused();
 
   const loadDevices = useCallback(async (): Promise<EnrichedDevice[]> => {
@@ -112,7 +117,12 @@ export default function SwitchOutput() {
     async (device: EnrichedDevice, stayOpen: boolean) => {
       if (!device.connected && device.bluetoothMac) {
         await showToast({ style: Toast.Style.Animated, title: `Connecting ${device.label}...` });
-        const connected = await bluetooth.connect(device.bluetoothMac);
+        let connected = false;
+        try {
+          connected = await bluetooth.connect(device.bluetoothMac);
+        } catch {
+          // blueutil threw at the subprocess boundary — connected stays false, reported below.
+        }
         if (!connected) {
           await showToast({ style: Toast.Style.Failure, title: `Connection failed: ${device.label}` });
           return;
@@ -142,17 +152,21 @@ export default function SwitchOutput() {
 
   const handleBluetoothToggle = useCallback(
     async (device: EnrichedDevice) => {
-      if (device.connected) {
-        await bluetooth.disconnect(device.bluetoothMac);
-        await showToast({ style: Toast.Style.Success, title: `${device.label} disconnected` });
-      } else {
-        await showToast({ style: Toast.Style.Animated, title: `Connecting ${device.label}...` });
-        const connected = await bluetooth.connect(device.bluetoothMac);
-        if (connected) {
-          await showToast({ style: Toast.Style.Success, title: `${device.label} connected` });
+      try {
+        if (device.connected) {
+          await bluetooth.disconnect(device.bluetoothMac);
+          await showToast({ style: Toast.Style.Success, title: `${device.label} disconnected` });
         } else {
-          await showToast({ style: Toast.Style.Failure, title: `Connection failed: ${device.label}` });
+          await showToast({ style: Toast.Style.Animated, title: `Connecting ${device.label}...` });
+          const connected = await bluetooth.connect(device.bluetoothMac);
+          if (connected) {
+            await showToast({ style: Toast.Style.Success, title: `${device.label} connected` });
+          } else {
+            await showToast({ style: Toast.Style.Failure, title: `Connection failed: ${device.label}` });
+          }
         }
+      } catch {
+        await showToast({ style: Toast.Style.Failure, title: `Bluetooth operation failed: ${device.label}` });
       }
       await loadDevices();
     },
@@ -160,7 +174,7 @@ export default function SwitchOutput() {
   );
 
   const applyConfigUpdate = useCallback(
-    async (updated: AudioManagerConfig) => {
+    async (updated: LoadedAudioManagerConfig) => {
       saveConfig(updated);
       setConfig(updated);
       const [platformDevices, active] = await Promise.all([
@@ -202,6 +216,12 @@ export default function SwitchOutput() {
     const updated = { ...config, showAllDevices: !config.showAllDevices };
     await applyConfigUpdate(updated);
   }, [config, applyConfigUpdate]);
+
+  const handleFollowPriority = useCallback(async () => {
+    await followOutputPriority();
+    await showToast({ style: Toast.Style.Success, title: "Auto Mode — following priority" });
+    await loadDevices();
+  }, [loadDevices]);
 
   return (
     <List isLoading={isLoading}
@@ -261,6 +281,14 @@ export default function SwitchOutput() {
                     onAction={() => handleBluetoothToggle(device)}
                   />
                 )}
+                <ActionPanel.Section title="Mode">
+                  <Action
+                    title="Follow Priority (Auto Mode)"
+                    icon={Icon.Repeat}
+                    shortcut={{ modifiers: ["cmd"], key: "u" }}
+                    onAction={handleFollowPriority}
+                  />
+                </ActionPanel.Section>
                 <ActionPanel.Section title="Configure">
                   {device.configured && (
                     <>

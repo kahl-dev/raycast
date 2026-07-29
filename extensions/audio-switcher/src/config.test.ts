@@ -32,4 +32,18 @@ describe("loadConfig", () => {
 
     expect(config).to.deep.equal(DEFAULT_CONFIG);
   });
+
+  it("preserves unknown top-level keys through the load roundtrip", () => {
+    const rawWithUnknownField = JSON.stringify({
+      devices: [],
+      inputGuard: "Wave:3",
+      showAllDevices: false,
+      daemonOnlyField: { nested: true },
+    });
+
+    const config = loadConfig(rawWithUnknownField);
+
+    expect(config.daemonOnlyField).to.deep.equal({ nested: true });
+    expect(JSON.parse(JSON.stringify(config)).daemonOnlyField).to.deep.equal({ nested: true });
+  });
 });

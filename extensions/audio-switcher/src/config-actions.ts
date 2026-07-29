@@ -1,10 +1,14 @@
 import type { AudioManagerConfig } from "./types";
 
-export function updateDevicePriority(
-  config: AudioManagerConfig,
+// Generic over the concrete config shape so the daemon's own top-level fields (which
+// loadConfig preserves) stay part of the type all the way to the save. It is also the
+// enforcement: rebuilding the result from known fields is not assignable to T, so a future
+// edit that drops the spread fails to compile instead of silently deleting daemon data.
+export function updateDevicePriority<T extends AudioManagerConfig>(
+  config: T,
   deviceName: string,
   direction: "up" | "down",
-): AudioManagerConfig {
+): T {
   const sorted = [...config.devices].sort((a, b) => a.priority - b.priority);
   const index = sorted.findIndex((d) => d.name === deviceName);
   if (index === -1) {
@@ -24,10 +28,10 @@ export function updateDevicePriority(
   return { ...config, devices: sorted };
 }
 
-export function toggleDeviceHidden(
-  config: AudioManagerConfig,
+export function toggleDeviceHidden<T extends AudioManagerConfig>(
+  config: T,
   deviceName: string,
-): AudioManagerConfig {
+): T {
   const devices = config.devices.map((device) =>
     device.name === deviceName ? { ...device, hidden: !device.hidden } : device,
   );

@@ -23,9 +23,10 @@ function luaQuote(value: string): string {
   );
 }
 
-// Run a Lua snippet via the Hammerspoon CLI and return its trimmed stdout.
-// Best-effort by design: when the daemon is not running (undocked) or `hs` is absent there is no
-// arbiter to talk to, so a failed call returns null rather than throwing.
+// Run a Lua snippet via the Hammerspoon CLI and return its trimmed stdout, or null on any
+// failure — hs binary missing, IPC timeout, or a Lua error. That is NOT the "undocked" case:
+// the daemon module loads and its Raycast-facing functions run fine while undocked; only its
+// automatic arbitration is gated internally. null means Hammerspoon itself is unreachable.
 async function runHs(lua: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(HS_BINARY, ["-c", lua], { timeout: 2000 });
@@ -51,18 +52,35 @@ export async function notePick(kind: PickKind, deviceName: string): Promise<void
 }
 
 /**
- * Drop a previously recorded explicit pick — e.g. when the Raycast switch it was recorded for
- * turned out to fail, so the daemon should not "restore" onto a device the user never reached.
+ * Undo the last notePick because the switch it announced never landed. The daemon restores the
+ * pick this attempt displaced, so a failed switch cannot demote a still-valid pick to AUTO.
  */
-export async function clearPick(kind: PickKind): Promise<void> {
-  await runHs(audioManagerCall("clearExplicit", `'${kind}'`));
+export async function revertPick(kind: PickKind): Promise<void> {
+  await runHs(audioManagerCall("revertExplicit", `'${kind}'`));
+}
+
+/**
+ * Return the output to AUTO: the daemon drops the explicit pick and immediately settles onto the
+ * highest-priority available device. Clearing the pick alone would only take effect at the next
+ * device event, which may be hours away.
+ */
+export async function followOutputPriority(): Promise<void> {
+  await runHs(audioManagerCall("followPriority"));
+}
+
+/**
+ * Return the input to the strict guard: the daemon drops the explicit pick and enforces the
+ * guard device (Wave:3) immediately instead of waiting for the next device event.
+ */
+export async function resetInputToGuard(): Promise<void> {
+  await runHs(audioManagerCall("resetInputToGuard"));
 }
 
 /**
  * Toggle mute on the current default input device via the daemon's per-device volume control,
  * which mutes the mic actually capturing and preserves its gain across unmute. Returns the new
- * muted state, or null when the daemon or per-device volume control is unavailable — the caller
- * then falls back to AppleScript on the current input.
+ * muted state, or null when Hammerspoon is unreachable, the Wave:3 device is not found, or it has
+ * no controllable input volume — the caller then falls back to AppleScript on the current input.
  */
 export async function toggleInputMute(): Promise<boolean | null> {
   const lua = REQUIRE_DAEMON + "if ok and m.toggleInputMute then return m.toggleInputMute() end; return 'NODEV'";
@@ -73,20 +91,24 @@ export async function toggleInputMute(): Promise<boolean | null> {
 }
 
 /**
- * Toggle the daemon's automatic audio arbitration (pause/resume). Returns the new state, or null
- * when the daemon is unavailable (undocked — there is no automation running to toggle anyway).
+ * Toggle the daemon's automatic audio arbitration (pause/resume). The Lua side reports both the
+ * new pause state and whether the daemon is currently docked — arbitration only runs docked, but
+ * the toggle works either way and takes effect at the next dock. Returns null on an unreachable
+ * Hammerspoon (see runHs) or an unrecognized reply.
  */
-export async function toggleAutomation(): Promise<"PAUSED" | "ACTIVE" | null> {
+export async function toggleAutomation(): Promise<{ state: "PAUSED" | "ACTIVE"; docked: boolean } | null> {
   const lua = REQUIRE_DAEMON + "if ok and m.togglePause then return m.togglePause() end; return nil";
   const result = await runHs(lua);
-  if (result === "PAUSED") return "PAUSED";
-  if (result === "ACTIVE") return "ACTIVE";
+  if (result === "PAUSED") return { state: "PAUSED", docked: true };
+  if (result === "ACTIVE") return { state: "ACTIVE", docked: true };
+  if (result === "PAUSED_UNDOCKED") return { state: "PAUSED", docked: false };
+  if (result === "ACTIVE_UNDOCKED") return { state: "ACTIVE", docked: false };
   return null;
 }
 
 /**
- * Whether the daemon's audio automation is currently paused. Best-effort: when the daemon is
- * unavailable (undocked) there is no active automation, so report not-paused.
+ * Whether the daemon's audio automation is currently paused. Reports false (not paused) as the
+ * safe default when Hammerspoon is unreachable (see runHs).
  */
 export async function isAutomationPaused(): Promise<boolean> {
   const lua = REQUIRE_DAEMON + "if ok and m.isPaused then return m.isPaused() end; return false";
