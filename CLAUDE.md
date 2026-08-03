@@ -38,17 +38,31 @@ Located in `extensions/audio-switcher/`. Uses **bun** (per global preference) an
 ```bash
 cd extensions/audio-switcher
 bun install            # dependencies
-bun run dev            # ray develop (live dev session)
+bun run dev            # deploys into Raycast Beta, then watches for changes
 bun run test           # vitest run
 bunx tsc --noEmit      # type-check
 ```
 
 Commands: Switch Audio Output, Switch Input Device, Toggle Mic Mute, Toggle Audio Automation.
 
-**DEPLOY IS PART OF DONE.** Raycast runs the LAST IMPORTED BUILD, not the source tree — after
-any extension change, run `bun run dev` once (imports the fresh build into Raycast), verify the
-commands, then stop it (the build persists without the dev server). Skipping this shipped a
-months-stale 2-of-4-command build while all tests were green (found in the 2026-07-06 audit).
+**Deploy is part of done.** Raycast runs the last deployed build, not the source tree — after any
+extension change run `bun run dev` once, verify the commands in Raycast, then stop it. The deploy
+persists without the dev server. Skipping this shipped a months-stale 2-of-4-command build while all
+tests were green (2026-07-06 audit).
+
+**The deploy target is pinned per extension.** Every extension here uses
+`"dev": "RAY_Target=x ray develop"`, which deploys into Raycast Beta (`com.raycast-x.macos`,
+`~/.config/raycast-x/extensions/`) — the app in daily use. Without that pin the CLI defaults to
+Stable, which is installed but never opened, and the deploy reports success while nothing visible
+changes. New extensions need the same pin.
+
+**After a re-import, deploy again.** Removing and re-importing an extension in Raycast can leave its
+directory holding only `package.json` and `assets/`: every command listed, none runnable, each
+failing with `Missing executable`. Run `bun run dev` afterwards and confirm one `.js` per command
+landed in the extension directory.
+
+Flavor mechanism, full target table and troubleshooting live in `Skill(raycast)` →
+`references/local-development.md`. Keep them there rather than restating them here.
 
 ### AI Limits Extension
 
