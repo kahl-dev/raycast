@@ -1,0 +1,18 @@
+Projekt Sync-Meeting Transcript
+Donnerstag, 6. August 2026
+42m 18s
+
+Anna Beispiel started transcription
+
+Anna Beispiel	0:05 Hallo zusammen, können wir loslegen?
+Max Mustermann	0:12 Ja klar, ich bin bereit.
+Vogel, Petra	0:20 Grüß euch! 👋 Lasst uns mit der Übersicht starten.
+Anna Beispiel - ACME GMBH	0:30 Wir haben das Angebot geprüft und die Rückmeldung war größtenteils positiv.
+Max Mustermann  0:45 Können wir das nochmal zusammenfassen?
+Tom Fischer	1:02 Natürlich, ich schicke die Notizen später 📝.
+xxx---garbage---xxx nothing to see here 42
+
+Anna Beispiel	1:15 Über die Kosten müssen wir noch sprechen – die Prüfung läuft.
+Vogel, Petra	1:03:12 Ich habe hier ein Update aus dem Status-Meeting von gestern.
+Max Mustermann	1:30 Perfekt, dann sind wir soweit fertig.
+Tom Fischer	1:45 Bis zum nächsten Mal! 😊

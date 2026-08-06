@@ -1,0 +1,111 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "transcribe",
+  "title": "Transcribe",
+  "description": "Convert MeetingTranscriber Teams transcripts into German meeting protocols and manage recording/transcription jobs",
+  "icon": "icon.png",
+  "author": "kahl.dev",
+  "license": "MIT",
+  "categories": ["Productivity"],
+  "commands": [
+    {
+      "name": "transcribe-file",
+      "title": "Transcribe File",
+      "subtitle": "Meeting Transcriber",
+      "description": "Pick a Teams transcript or audio file and route it to conversion or recording",
+      "mode": "view",
+      "keywords": ["transcribe", "transkript", "meeting", "protokoll", "call"]
+    },
+    {
+      "name": "recording-status",
+      "title": "Recording Status",
+      "subtitle": "Meeting Transcriber",
+      "description": "Live MeetingTranscriber recording/watch state and recent protocols in the menu bar",
+      "mode": "menu-bar",
+      "interval": "1m",
+      "keywords": ["transcribe", "transkript", "meeting", "protokoll", "call"]
+    },
+    {
+      "name": "open-latest-protocol",
+      "title": "Open Latest Protocol",
+      "subtitle": "Meeting Transcriber",
+      "description": "Open the most recently written meeting protocol in Obsidian",
+      "mode": "no-view",
+      "keywords": ["transcribe", "transkript", "meeting", "protokoll", "call"]
+    },
+    {
+      "name": "list-transcripts",
+      "title": "List Transcripts",
+      "subtitle": "Meeting Transcriber",
+      "description": "Search and open past meeting protocols and transcripts",
+      "mode": "view",
+      "keywords": ["transcribe", "transkript", "meeting", "protokoll", "call"]
+    }
+  ],
+  "tools": [
+    {
+      "name": "search-transcripts",
+      "title": "Search Transcripts",
+      "description": "Search Patrick's local meeting transcripts and protocols for a query string, returning matching files with the matching line and surrounding context"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "protocolsDir",
+      "title": "Protocols Directory",
+      "description": "Directory where MeetingTranscriber writes generated meeting protocols",
+      "type": "textfield",
+      "default": "/Users/kahl-dev/MeetingTranscriber/protocols",
+      "required": false
+    },
+    {
+      "name": "vaultTranscriptsDir",
+      "title": "Vault Transcripts Directory",
+      "description": "Obsidian vault directory containing transcripts and protocols",
+      "type": "textfield",
+      "default": "/Users/kahl-dev/Obsidian/kahl_dev/transcripts",
+      "required": false
+    },
+    {
+      "name": "claudeBin",
+      "title": "Claude Binary Path",
+      "description": "Path to the claude CLI binary used to generate meeting protocols",
+      "type": "textfield",
+      "default": "/Users/kahl-dev/.local/bin/claude",
+      "required": false
+    },
+    {
+      "name": "mtBaseUrl",
+      "title": "MeetingTranscriber API Base URL",
+      "description": "Base URL of the MeetingTranscriber Local Automation API",
+      "type": "textfield",
+      "default": "http://127.0.0.1:9876",
+      "required": false
+    },
+    {
+      "name": "mtTokenPath",
+      "title": "MeetingTranscriber Token Path",
+      "description": "Path to the MeetingTranscriber Local Automation API token file",
+      "type": "textfield",
+      "default": "/Users/kahl-dev/Library/Application Support/MeetingTranscriber/.rpc-token",
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.94.0",
+    "@raycast/utils": "^1.17.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.6",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.4.5",
+    "vitest": "^3.0.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "RAY_Target=x ray develop",
+    "lint": "ray lint",
+    "test": "vitest run"
+  }
+}
