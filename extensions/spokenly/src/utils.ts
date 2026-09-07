@@ -1,5 +1,5 @@
 import { homedir } from "os";
-import { readFileSync, readdirSync, statSync } from "fs";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { SpokenlyTranscription, DateFilter } from "./types";
 
@@ -30,6 +30,12 @@ export function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${minutes}m${secs.toString().padStart(2, "0")}s`;
+}
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getAllJsonFiles(): string[] {
@@ -145,10 +151,6 @@ export async function loadTranscriptions(dateFilter: DateFilter = DateFilter.All
 }
 
 export function exportToFile(transcription: SpokenlyTranscription): void {
-  const { writeFileSync } = require("fs");
-  const { homedir } = require("os");
-  const { join } = require("path");
-
   const desktopDir = join(homedir(), "Desktop");
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").split("T")[0];
   const filename = `spokenly-${timestamp}-${Date.now()}.txt`;
