@@ -1,0 +1,121 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "jira-hub",
+  "title": "Jira Hub",
+  "description": "Unified Jira dashboard with action-priority sections, overbook/reply/stale detection, and a live menu bar status",
+  "icon": "icon.png",
+  "author": "kahl.dev",
+  "license": "MIT",
+  "categories": ["Productivity"],
+  "commands": [
+    {
+      "name": "dashboard",
+      "title": "Jira Dashboard",
+      "description": "Unified view of all your Jira issues, prioritized by what needs action",
+      "mode": "view"
+    },
+    {
+      "name": "menubar",
+      "title": "Jira Status",
+      "description": "Live ticket counts in the macOS menu bar",
+      "mode": "menu-bar",
+      "interval": "5m"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "instanceUrl",
+      "type": "textfield",
+      "required": true,
+      "title": "Jira Instance URL",
+      "description": "Base URL of your Atlassian Cloud instance (no trailing slash)",
+      "default": "https://louis-internet.atlassian.net",
+      "placeholder": "https://your-company.atlassian.net"
+    },
+    {
+      "name": "email",
+      "type": "textfield",
+      "required": true,
+      "title": "Atlassian Email",
+      "description": "Email of your Atlassian account",
+      "placeholder": "you@example.com"
+    },
+    {
+      "name": "apiToken",
+      "type": "password",
+      "required": true,
+      "title": "Atlassian API Token",
+      "description": "Create at https://id.atlassian.com/manage-profile/security/api-tokens",
+      "placeholder": "ATATT3xFf..."
+    },
+    {
+      "name": "internalProjectKeys",
+      "type": "textfield",
+      "required": false,
+      "title": "Internal Project Keys",
+      "description": "Comma-separated project keys NOT counted as customer (e.g. internal/dev projects)",
+      "default": "LIADEV,LIA,LIAKI,LIAC,LIAW",
+      "placeholder": "LIADEV,LIA,LIAKI"
+    },
+    {
+      "name": "devProjectKeys",
+      "type": "textfield",
+      "required": false,
+      "title": "Backlog/Dev Project Keys (dimmed, excluded from Needs-Action)",
+      "description": "Comma-separated project keys for low-priority backlog projects. Tickets here are dimmed at the bottom and never bubble into Needs-Action, even if stale or overbooked.",
+      "default": "LIADEV,LIAW",
+      "placeholder": "LIADEV,LIAW"
+    },
+    {
+      "name": "internalCoreProjectKeys",
+      "type": "textfield",
+      "required": false,
+      "title": "Internal Core Project Keys",
+      "description": "Comma-separated project keys in the 'Intern' section (e.g. LIA,LIAKI,LIAC)",
+      "default": "LIA,LIAKI,LIAC",
+      "placeholder": "LIA,LIAKI,LIAC"
+    },
+    {
+      "name": "overbookThresholdPct",
+      "type": "textfield",
+      "required": false,
+      "title": "Overbook Threshold (%)",
+      "description": "Ticket flagged as overbooked when spent/estimate >= this percentage",
+      "default": "80"
+    },
+    {
+      "name": "replyThresholdWorkdays",
+      "type": "textfield",
+      "required": false,
+      "title": "Reply-Needed Threshold (workdays)",
+      "description": "Ticket flagged when last comment is from someone else and older than N workdays",
+      "default": "1"
+    },
+    {
+      "name": "staleThresholdWorkdays",
+      "type": "textfield",
+      "required": false,
+      "title": "Stale Threshold (workdays)",
+      "description": "In-Progress ticket flagged when no update for N workdays",
+      "default": "5"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.94.0",
+    "@raycast/utils": "^1.17.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.6",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.4.5",
+    "vitest": "^3.0.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "RAY_Target=x ray develop",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "ray lint"
+  }
+}

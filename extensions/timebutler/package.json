@@ -1,0 +1,131 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "timebutler",
+  "title": "Time-Butler",
+  "description": "LIA Time-Butler Awareness-Hub: Team-Heute, Urlaubsstand, Brückentage, Abwesenheiten, Feiertage, Team-Kalender",
+  "icon": "extension-icon.png",
+  "author": "kahl.dev",
+  "license": "MIT",
+  "categories": ["Productivity"],
+  "commands": [
+    {
+      "name": "team-today",
+      "title": "Team Heute",
+      "description": "Wer ist heute weg und warum",
+      "mode": "view"
+    },
+    {
+      "name": "my-vacation",
+      "title": "Mein Urlaubsstand",
+      "subtitle": "Time-Butler",
+      "description": "Resturlaub + nächster geplanter Urlaub",
+      "mode": "view"
+    },
+    {
+      "name": "menu-bar",
+      "title": "Time-Butler Menu Bar",
+      "description": "Persistente Anzeige Team-Heute + Urlaubsstand in der macOS Menubar",
+      "mode": "menu-bar",
+      "interval": "30m"
+    },
+    {
+      "name": "bridge-days",
+      "title": "Brückentage Optimizer",
+      "description": "Klassische Brückentage + Brückenwochen mit Hebel-Anzeige",
+      "mode": "view"
+    },
+    {
+      "name": "my-absences",
+      "title": "Meine Abwesenheiten",
+      "description": "Eigene Abwesenheiten mit Filter (Upcoming/Krankheit/Urlaub/Termine) und Jahres-Switch",
+      "mode": "view"
+    },
+    {
+      "name": "team-week",
+      "title": "Team-Kalender Woche",
+      "description": "Wochenansicht aller Kollegen mit Status-Codes",
+      "mode": "view"
+    },
+    {
+      "name": "holidays",
+      "title": "Feiertage NRW",
+      "description": "NRW-Feiertage des Jahres mit Countdown",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "tbUser",
+      "type": "textfield",
+      "required": true,
+      "title": "Time-Butler Email",
+      "description": "Login-Email für Time-Butler",
+      "placeholder": "vorname.nachname@firma.de"
+    },
+    {
+      "name": "tbPassword",
+      "type": "password",
+      "required": true,
+      "title": "Time-Butler Password",
+      "description": "Login-Passwort"
+    },
+    {
+      "name": "tbUserId",
+      "type": "textfield",
+      "required": true,
+      "title": "Time-Butler User-ID",
+      "description": "Numerische User-ID aus Time-Butler Profile-URL (?id=...)",
+      "placeholder": "55490"
+    },
+    {
+      "name": "tbIcalUrl",
+      "type": "textfield",
+      "required": true,
+      "title": "Time-Butler iCal URL",
+      "description": "Aus Einstellungen → Integration → Mit Kalender synchronisieren → Abonnement-Link"
+    },
+    {
+      "name": "tbInstance",
+      "type": "textfield",
+      "required": false,
+      "default": "https://app.timebutler.com",
+      "title": "Time-Butler Instance",
+      "description": "Base-URL der Time-Butler-Webapp"
+    },
+    {
+      "name": "skillPath",
+      "type": "textfield",
+      "required": false,
+      "default": "/Users/kahl-dev/code/src/github.com/kahl-dev/claude-config/skills/timebutler/scripts",
+      "title": "Skill Scripts Path",
+      "description": "Pfad zu den Time-Butler Python-Scripts (claude-config skill)"
+    },
+    {
+      "name": "uvBinary",
+      "type": "textfield",
+      "required": false,
+      "default": "/Users/kahl-dev/.local/bin/uv",
+      "title": "uv Binary Path",
+      "description": "Absoluter Pfad zur uv-CLI"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.94.0",
+    "@raycast/utils": "^1.17.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.6",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.4.5",
+    "vitest": "^3.0.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "RAY_Target=x ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}
