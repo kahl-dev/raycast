@@ -16,11 +16,17 @@
 # @raycast.authorURL https://raycast.com/kahl.dev
 
 on run
-  set appList to {"Logi Tune", "Elgato Wave Link", "Elgato Stream Deck"}
+  -- Each entry is a list: {App Name, Bundle Identifier}
+  set appList to {{"Logi Tune", "com.logitech.logitune"}, ¬
+                  {"Elgato Wave Link", "com.elgato.WaveLink"}, ¬
+                  {"Elgato Stream Deck", "com.elgato.StreamDeck"}, ¬
+                  {"ScanSnap Home", "com.fujitsu.pfu.ScanSnapHome"}}
   
-  repeat with appName in appList
+  repeat with appInfo in appList
+    set appName to item 1 of appInfo
+    set appId to item 2 of appInfo
     try
-      tell application appName to quit
+      tell application id appId to quit
     on error errMsg number errNum
       if errNum is -128 then
         log "User canceled quitting " & appName & "; ignoring."

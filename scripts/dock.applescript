@@ -16,10 +16,12 @@
 # @raycast.authorURL https://raycast.com/kahl.dev
 
 on run
-  set appList to {"Elgato Wave Link", "Elgato Stream Deck"}
+  -- Each entry is a list: {App Name, Bundle Identifier}
+  set appList to {{"Elgato Wave Link", "com.elgato.WaveLink"}, {"Elgato Stream Deck", "com.elgato.StreamDeck"}}
   
-  repeat with appName in appList
-    tell application appName to launch
+  repeat with appInfo in appList
+    set appId to item 2 of appInfo
+    tell application id appId to launch
   end repeat
   
   display notification "All docking apps have been opened." with title "Dock Mode"
