@@ -1,0 +1,136 @@
+{
+  "fetched_at": "2026-09-16T11:20:00.000Z",
+  "stale": false,
+  "accounts": [
+    { "name": "work", "label": "w" },
+    { "name": "private", "label": "p" },
+    { "name": "work-2", "label": "2" }
+  ],
+  "buckets": [
+    {
+      "id": "anthropic.session",
+      "provider": "anthropic",
+      "account": "work",
+      "label": "Session (5h)",
+      "percent": 63.0,
+      "resets_at": "2026-09-16T16:00:00.000Z",
+      "window_seconds": 18000,
+      "observed_at": "2026-09-16T11:19:00.000Z",
+      "elapsed_percent": 40.0
+    },
+    {
+      "id": "anthropic.weekly_all",
+      "provider": "anthropic",
+      "account": "work",
+      "label": "Weekly (all models)",
+      "percent": 85.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:19:00.000Z",
+      "elapsed_percent": 70.0
+    },
+    {
+      "id": "anthropic.weekly.fable",
+      "provider": "anthropic",
+      "account": "work",
+      "label": "Weekly (Fable)",
+      "percent": 52.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:19:00.000Z",
+      "elapsed_percent": 70.0
+    },
+    {
+      "id": "anthropic.session",
+      "provider": "anthropic",
+      "account": "private",
+      "label": "Session (5h)",
+      "percent": 12.0,
+      "resets_at": "2026-09-16T15:30:00.000Z",
+      "window_seconds": 18000,
+      "observed_at": "2026-09-16T11:18:00.000Z",
+      "elapsed_percent": 25.0
+    },
+    {
+      "id": "anthropic.weekly_all",
+      "provider": "anthropic",
+      "account": "private",
+      "label": "Weekly (all models)",
+      "percent": 0.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:18:00.000Z",
+      "elapsed_percent": 70.0
+    },
+    {
+      "id": "anthropic.weekly.fable",
+      "provider": "anthropic",
+      "account": "private",
+      "label": "Weekly (Fable)",
+      "percent": 0.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:18:00.000Z",
+      "elapsed_percent": 70.0
+    },
+    {
+      "id": "anthropic.session",
+      "provider": "anthropic",
+      "account": "work-2",
+      "label": "Session (5h)",
+      "percent": 0.0,
+      "resets_at": "2026-09-16T15:00:00.000Z",
+      "window_seconds": 18000,
+      "observed_at": "2026-09-16T11:17:00.000Z",
+      "elapsed_percent": 10.0
+    },
+    {
+      "id": "anthropic.weekly_all",
+      "provider": "anthropic",
+      "account": "work-2",
+      "label": "Weekly (all models)",
+      "percent": 0.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:17:00.000Z",
+      "elapsed_percent": 70.0
+    },
+    {
+      "id": "anthropic.weekly.fable",
+      "provider": "anthropic",
+      "account": "work-2",
+      "label": "Weekly (Fable)",
+      "percent": 0.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:17:00.000Z",
+      "elapsed_percent": 70.0
+    },
+    {
+      "id": "codex.primary",
+      "provider": "codex",
+      "account": "default",
+      "label": "Primary (7d)",
+      "percent": 100.0,
+      "resets_at": "2026-09-20T10:53:00.000Z",
+      "window_seconds": 604800,
+      "observed_at": "2026-09-16T11:15:00.000Z",
+      "elapsed_percent": 70.0
+    }
+  ],
+  "errors": [],
+  "skipped": [],
+  "reset_credits": 0,
+  "plans": [
+    { "provider": "anthropic", "account": "work", "plan": "max_20x", "source": "credentials" },
+    { "provider": "anthropic", "account": "private", "plan": "max_5x", "source": "credentials" },
+    { "provider": "anthropic", "account": "work-2", "plan": "max_5x", "source": "credentials" },
+    { "provider": "codex", "account": "default", "plan": "self_serve_business_prolite", "source": "app-server" }
+  ],
+  "sources": [
+    { "provider": "anthropic", "account": "work", "source": "endpoint" },
+    { "provider": "anthropic", "account": "private", "source": "endpoint" },
+    { "provider": "anthropic", "account": "work-2", "source": "endpoint" },
+    { "provider": "codex", "account": "default", "source": "app-server" }
+  ]
+}

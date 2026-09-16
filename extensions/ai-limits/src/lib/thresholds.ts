@@ -1,8 +1,18 @@
 import { formatResetGerman } from "./format";
-import { Bucket, WARNING_THRESHOLD, CRITICAL_THRESHOLD } from "./types";
+import { WARNING_THRESHOLD, CRITICAL_THRESHOLD } from "./types";
 
 export const ALERT_THRESHOLDS = [WARNING_THRESHOLD, CRITICAL_THRESHOLD] as const;
 export type AlertThreshold = (typeof ALERT_THRESHOLDS)[number];
+
+// Minimal shape thresholds.ts actually reads off a bucket — deliberately narrower than
+// report.ts's ReportBucket (no provider/account/windowSeconds: alerts and resets never branch on
+// them). load.ts's toNotificationBucket adapts a ReportBucket down to this.
+export interface AlertBucket {
+  id: string;
+  label: string;
+  percent: number;
+  resetsAt: Date;
+}
 
 // How far percent must fall below a threshold before that alert re-arms. Anthropic usage limits are
 // rolling windows: percent climbs with use and drifts down as old usage ages out, so a bare "below
@@ -11,7 +21,7 @@ export type AlertThreshold = (typeof ALERT_THRESHOLDS)[number];
 const REARM_HYSTERESIS = 5;
 
 export interface FiredAlert {
-  bucket: Bucket;
+  bucket: AlertBucket;
   threshold: AlertThreshold;
 }
 
@@ -23,7 +33,7 @@ export function alertKey(bucketId: string, threshold: AlertThreshold): string {
   return `${bucketId}:${threshold}`;
 }
 
-export function determineAlertsToFire(buckets: Bucket[], firedKeys: ReadonlySet<string>): FiredAlert[] {
+export function determineAlertsToFire(buckets: AlertBucket[], firedKeys: ReadonlySet<string>): FiredAlert[] {
   const alerts: FiredAlert[] = [];
   for (const bucket of buckets) {
     for (const threshold of ALERT_THRESHOLDS) {
@@ -53,30 +63,45 @@ export function markAlertsFired(firedKeys: ReadonlySet<string>, fired: FiredAler
   return addKeys(firedKeys, fired, (alert) => alertKey(alert.bucket.id, alert.threshold));
 }
 
-// Re-arm logic, driven by percent (never resetsAt — see alertKey). Iterating the CURRENT buckets
-// means a fired key is retained only while its bucket still exists and still justifies suppression;
-// keys for vanished buckets are simply never re-added. An alert key stays suppressed while percent is
-// still at/above the threshold (minus hysteresis); once percent falls further, the key drops and the
-// alert re-arms for the next genuine climb.
-export function pruneFiredKeys(firedKeys: ReadonlySet<string>, buckets: Bucket[]): Set<string> {
-  const retained = new Set<string>();
+// A fired key is dropped (re-armed) only on positive evidence: a fresh observation of its bucket
+// below threshold - hysteresis. `buckets` is the caller's freshness-filtered list (load.ts
+// isFreshBucket), so a bucket absent from this run or older than the baseline keeps its keys —
+// otherwise one run without the bucket would re-arm 80/95 and they would fire again on recovery.
+export function pruneFiredKeys(firedKeys: ReadonlySet<string>, buckets: AlertBucket[]): Set<string> {
+  const retained = new Set(firedKeys);
   for (const bucket of buckets) {
     for (const threshold of ALERT_THRESHOLDS) {
       const key = alertKey(bucket.id, threshold);
-      if (firedKeys.has(key) && bucket.percent >= threshold - REARM_HYSTERESIS) {
-        retained.add(key);
+      if (retained.has(key) && bucket.percent < threshold - REARM_HYSTERESIS) {
+        retained.delete(key);
       }
     }
   }
   return retained;
 }
 
-export function formatAlertMessage(bucket: Bucket, threshold: AlertThreshold, now: Date = new Date()): string {
+// Several thresholds can cross in the same run (e.g. a bucket jumps straight from 60% to
+// 100%). determineAlertsToFire still reports every crossed-and-unfired threshold — markAlertsFired
+// needs all of them so a later drop back to, say, 90% does not let the 80 threshold re-fire — but
+// only one notification per bucket should reach the user per run, and the highest threshold's
+// wording is the most informative one to show.
+export function selectAlertsToNotify(fired: FiredAlert[]): FiredAlert[] {
+  const highestByBucketId = new Map<string, FiredAlert>();
+  for (const alert of fired) {
+    const current = highestByBucketId.get(alert.bucket.id);
+    if (current === undefined || alert.threshold > current.threshold) {
+      highestByBucketId.set(alert.bucket.id, alert);
+    }
+  }
+  return [...highestByBucketId.values()];
+}
+
+export function formatAlertMessage(bucket: AlertBucket, threshold: AlertThreshold, now: Date = new Date()): string {
   return `${bucket.label}-Limit bei ${Math.round(bucket.percent)}% — Reset ${formatResetGerman(bucket.resetsAt, now)}`;
 }
 
 export interface ResetEvent {
-  bucket: Bucket;
+  bucket: AlertBucket;
 }
 
 // How far percent must fall between two consecutive observations to count as a reset rather than
@@ -94,7 +119,7 @@ export const RESET_DROP_POINTS = 10;
 // the same reset can never produce a second drop — see the invariant test in thresholds.test.ts.
 // resetsAt is NOT consulted: its sub-second component changes on every request, which is what made
 // the original resetsAt-keyed dedup re-fire on every tick.
-export function determineResetEvents(previousBuckets: Bucket[], currentBuckets: Bucket[]): ResetEvent[] {
+export function determineResetEvents(previousBuckets: AlertBucket[], currentBuckets: AlertBucket[]): ResetEvent[] {
   const events: ResetEvent[] = [];
   for (const current of currentBuckets) {
     const previous = previousBuckets.find((bucket) => bucket.id === current.id);
@@ -109,6 +134,6 @@ export function determineResetEvents(previousBuckets: Bucket[], currentBuckets: 
   return events;
 }
 
-export function formatResetMessage(bucket: Bucket): string {
+export function formatResetMessage(bucket: AlertBucket): string {
   return `${bucket.label}-Limit resettet — wieder verfügbar`;
 }

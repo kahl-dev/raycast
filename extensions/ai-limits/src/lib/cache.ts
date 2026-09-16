@@ -1,25 +1,67 @@
 import { Cache } from "@raycast/api";
 import { HistoryPoint, parseHistoryJson, serializeHistoryJson } from "./projection";
-import { Bucket, Provider } from "./types";
+import { AiLimitsReport, parseAiLimitsReport } from "./report";
 
-// Einziges lib-File mit @raycast/api-Import — Glue zwischen den reinen lib/*.ts-Funktionen
-// und Raycasts Cache-Speicher. resetsAt wird als ISO-String serialisiert (Cache speichert nur Strings).
+// Einziges lib-File mit @raycast/api-Import — Glue zwischen den reinen lib/*.ts-Funktionen und
+// Raycasts Cache-Speicher.
 const cache = new Cache();
 
-const CACHE_KEYS = {
-  lastAnthropicAttemptAt: "lastAnthropicAttemptAt",
-  lastCodexAttemptAt: "lastCodexAttemptAt",
-  lastCodexLoginAttemptAt: "lastCodexLoginAttemptAt",
-  lastGoodAnthropicBuckets: "lastGoodAnthropicBuckets",
-  lastGoodCodexBuckets: "lastGoodCodexBuckets",
-  firedAlertKeys: "firedAlertKeys",
-  lastUpdatedAt: "lastUpdatedAt",
-  lastCodexResetCreditsAvailable: "lastCodexResetCreditsAvailable",
-  lastAnthropicSkipped: "lastAnthropicSkipped",
-} as const;
+const LAST_GOOD_REPORT_KEY = "lastGoodReport";
+const FIRED_ALERT_KEYS_KEY = "firedAlertKeys";
+const LAST_OBSERVED_AT_PREFIX = "lastObservedAt:";
+const BUCKET_HISTORY_PREFIX = "bucketHistory:";
 
-function getDate(key: string): Date | null {
-  const stored = cache.get(key);
+// Inverse of parseAiLimitsReport's snake_case/ISO shape — the cached report is stored as the raw
+// ai-limits JSON text (not the camelCased AiLimitsReport), and read back through
+// parseAiLimitsReport itself so a cached report is validated exactly like a fresh one, and a
+// malformed or outdated cache entry fails the same way a malformed live response would.
+function toRawJson(report: AiLimitsReport): unknown {
+  return {
+    fetched_at: report.fetchedAt.toISOString(),
+    stale: report.stale,
+    accounts: report.accounts,
+    buckets: report.buckets.map((bucket) => ({
+      id: bucket.id,
+      provider: bucket.provider,
+      account: bucket.account,
+      label: bucket.label,
+      percent: bucket.percent,
+      resets_at: bucket.resetsAt.toISOString(),
+      window_seconds: bucket.windowSeconds,
+      observed_at: bucket.observedAt.toISOString(),
+      elapsed_percent: bucket.elapsedPercent,
+    })),
+    errors: report.errors,
+    skipped: report.skipped,
+    reset_credits: report.resetCredits,
+    plans: report.plans,
+    sources: report.sources,
+  };
+}
+
+export function getLastGoodReport(): AiLimitsReport | null {
+  const stored = cache.get(LAST_GOOD_REPORT_KEY);
+  if (stored === undefined) {
+    return null;
+  }
+  try {
+    return parseAiLimitsReport(JSON.parse(stored));
+  } catch (error) {
+    console.error("AI Limits: gecachter Report unlesbar, wird verworfen", error);
+    return null;
+  }
+}
+
+export function setLastGoodReport(report: AiLimitsReport): void {
+  cache.set(LAST_GOOD_REPORT_KEY, JSON.stringify(toRawJson(report)));
+}
+
+function lastObservedAtKey(bucketKey: string): string {
+  return `${LAST_OBSERVED_AT_PREFIX}${bucketKey}`;
+}
+
+export function getLastObservedAt(bucketKey: string): Date | null {
+  const stored = cache.get(lastObservedAtKey(bucketKey));
   if (stored === undefined) {
     return null;
   }
@@ -27,116 +69,29 @@ function getDate(key: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function setDate(key: string, date: Date): void {
-  cache.set(key, date.toISOString());
+export function setLastObservedAt(bucketKey: string, date: Date): void {
+  cache.set(lastObservedAtKey(bucketKey), date.toISOString());
 }
 
-export function getLastAnthropicAttemptAt(): Date | null {
-  return getDate(CACHE_KEYS.lastAnthropicAttemptAt);
-}
-
-export function setLastAnthropicAttemptAt(date: Date): void {
-  setDate(CACHE_KEYS.lastAnthropicAttemptAt, date);
-}
-
-export function getLastCodexAttemptAt(): Date | null {
-  return getDate(CACHE_KEYS.lastCodexAttemptAt);
-}
-
-export function setLastCodexAttemptAt(date: Date): void {
-  setDate(CACHE_KEYS.lastCodexAttemptAt, date);
-}
-
-export function getLastCodexLoginAttemptAt(): Date | null {
-  return getDate(CACHE_KEYS.lastCodexLoginAttemptAt);
-}
-
-export function setLastCodexLoginAttemptAt(date: Date): void {
-  setDate(CACHE_KEYS.lastCodexLoginAttemptAt, date);
-}
-
-export function getLastUpdatedAt(): Date | null {
-  return getDate(CACHE_KEYS.lastUpdatedAt);
-}
-
-export function setLastUpdatedAt(date: Date): void {
-  setDate(CACHE_KEYS.lastUpdatedAt, date);
-}
-
-// A stale reset-credits count is still more useful than the row vanishing outright: loadUsageData
-// (load.ts) falls back to this last genuinely observed value whenever a load skips the Codex fetch
-// (60s cooldown gate) or the fetch fails, so the dropdown's "Reset-Credits" row does not flicker
-// away on every cooldown-skipped tick. JSON.stringify/parse (not a raw String(value)) so a genuine
-// `null` (fetched successfully, zero/no reset credits reported) round-trips distinctly from the
-// cache-miss `undefined` that getDate-style helpers treat as "never written".
-export function getLastCodexResetCreditsAvailable(): number | null {
-  const stored = cache.get(CACHE_KEYS.lastCodexResetCreditsAvailable);
-  return stored === undefined ? null : (JSON.parse(stored) as number | null);
-}
-
-export function setLastCodexResetCreditsAvailable(value: number | null): void {
-  cache.set(CACHE_KEYS.lastCodexResetCreditsAvailable, JSON.stringify(value));
-}
-
-// Persisted for the same reason as the reset-credits value above: a cooldown-skipped or failed load
-// produces no fresh parse, so without a fallback the dropdown's "Limit nicht lesbar" row would
-// vanish while the degraded bucket stays degraded — which is exactly the silent failure the row
-// exists to prevent (roughly 40% of menu opens land inside the cooldown gate).
-export function getLastAnthropicSkipped(): string[] {
-  const stored = cache.get(CACHE_KEYS.lastAnthropicSkipped);
-  return stored === undefined ? [] : (JSON.parse(stored) as string[]);
-}
-
-export function setLastAnthropicSkipped(reasons: string[]): void {
-  cache.set(CACHE_KEYS.lastAnthropicSkipped, JSON.stringify(reasons));
-}
-
-function serializeBuckets(buckets: Bucket[]): string {
-  return JSON.stringify(buckets.map((bucket) => ({ ...bucket, resetsAt: bucket.resetsAt.toISOString() })));
-}
-
-function deserializeBuckets(raw: string | undefined): Bucket[] | null {
-  if (raw === undefined) {
-    return null;
-  }
-  const parsed = JSON.parse(raw) as Array<Omit<Bucket, "resetsAt"> & { resetsAt: string }>;
-  return parsed.map((item) => ({ ...item, resetsAt: new Date(item.resetsAt) }));
-}
-
-const LAST_GOOD_BUCKETS_KEYS: Record<Provider, string> = {
-  anthropic: CACHE_KEYS.lastGoodAnthropicBuckets,
-  openai: CACHE_KEYS.lastGoodCodexBuckets,
-};
-
-export function getLastGoodBuckets(provider: Provider): Bucket[] | null {
-  return deserializeBuckets(cache.get(LAST_GOOD_BUCKETS_KEYS[provider]));
-}
-
-export function setLastGoodBuckets(provider: Provider, buckets: Bucket[]): void {
-  cache.set(LAST_GOOD_BUCKETS_KEYS[provider], serializeBuckets(buckets));
-}
-
-const HISTORY_KEY_PREFIX = "bucketHistory:";
-
-function historyKey(bucketId: string): string {
-  return `${HISTORY_KEY_PREFIX}${bucketId}`;
+function bucketHistoryKey(bucketKey: string): string {
+  return `${BUCKET_HISTORY_PREFIX}${bucketKey}`;
 }
 
 // parseHistoryJson (projection.ts) carries the "malformed cache state degrades to empty, never
 // throws" logic — kept there rather than here because @raycast/api cannot be resolved at all in
 // this project's vitest environment, so any validation logic that needs to be unit tested has to
 // live in a pure lib file instead of in this Cache-backed glue file.
-export function getBucketHistory(bucketId: string): HistoryPoint[] {
-  const stored = cache.get(historyKey(bucketId));
+export function getBucketHistory(bucketKey: string): HistoryPoint[] {
+  const stored = cache.get(bucketHistoryKey(bucketKey));
   return stored === undefined ? [] : parseHistoryJson(stored);
 }
 
-export function setBucketHistory(bucketId: string, history: HistoryPoint[]): void {
-  cache.set(historyKey(bucketId), serializeHistoryJson(history));
+export function setBucketHistory(bucketKey: string, history: HistoryPoint[]): void {
+  cache.set(bucketHistoryKey(bucketKey), serializeHistoryJson(history));
 }
 
 export function getFiredAlertKeys(): Set<string> {
-  const stored = cache.get(CACHE_KEYS.firedAlertKeys);
+  const stored = cache.get(FIRED_ALERT_KEYS_KEY);
   if (stored === undefined) {
     return new Set();
   }
@@ -144,5 +99,5 @@ export function getFiredAlertKeys(): Set<string> {
 }
 
 export function setFiredAlertKeys(keys: Set<string>): void {
-  cache.set(CACHE_KEYS.firedAlertKeys, JSON.stringify([...keys]));
+  cache.set(FIRED_ALERT_KEYS_KEY, JSON.stringify([...keys]));
 }

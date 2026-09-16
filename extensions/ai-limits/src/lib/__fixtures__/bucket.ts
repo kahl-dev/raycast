@@ -1,13 +1,11 @@
-import { Bucket } from "../types";
+import { AlertBucket } from "../thresholds";
 
-export function bucket(overrides: Partial<Bucket> = {}): Bucket {
+export function bucket(overrides: Partial<AlertBucket> = {}): AlertBucket {
   return {
     id: "anthropic:session",
-    provider: "anthropic",
     label: "Session",
     percent: 23,
     resetsAt: new Date("2026-07-21T09:29:59.982Z"),
-    windowSeconds: 18000,
     ...overrides,
   };
 }

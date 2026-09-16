@@ -1,6 +1,17 @@
-import { describe, it, expect } from "vitest";
-import { escapeAppleScriptString, sendMacNotification } from "./notify";
-import { fakeExecFile, fakeExecFileFails } from "./__fixtures__/exec";
+import { describe, it, expect, vi, type Mock } from "vitest";
+import { escapeAppleScriptString, ExecFileFunction, sendMacNotification } from "./notify";
+
+type FakeExecFile = Mock<ExecFileFunction>;
+
+function fakeExecFile(stdout = "", stderr = ""): FakeExecFile {
+  return vi.fn<ExecFileFunction>(async () => ({ stdout, stderr }));
+}
+
+function fakeExecFileFails(message: string): FakeExecFile {
+  return vi.fn<ExecFileFunction>(async () => {
+    throw new Error(message);
+  });
+}
 
 describe("escapeAppleScriptString", () => {
   it("escapes double quotes", () => {

@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeBucketSeverities, formatDurationShort, formatResetGerman, formatTimeShort } from "./format";
-import { bucket } from "./__fixtures__/bucket";
+import { formatDurationShort, formatResetGerman, formatTimeShort } from "./format";
 
 describe("formatTimeShort", () => {
   it("zero-pads single-digit hours and minutes", () => {
@@ -66,33 +65,5 @@ describe("formatResetGerman", () => {
     const resetsAt = new Date(2026, 6, 21, 7, 0);
 
     expect(formatResetGerman(resetsAt, now)).to.equal("07:00");
-  });
-});
-
-describe("computeBucketSeverities", () => {
-  const now = new Date(2026, 6, 21, 8, 0);
-
-  it("pairs each bucket with its displaySeverity, preserving input order", () => {
-    const normalBucket = bucket({
-      id: "anthropic:session",
-      percent: 30,
-      resetsAt: new Date(now.getTime() - 1000),
-      windowSeconds: 18000,
-    });
-    const criticalBucket = bucket({
-      id: "anthropic:weekly_all",
-      percent: 95,
-      resetsAt: new Date(now.getTime() + 18000 * 1000),
-      windowSeconds: 18000,
-    });
-
-    expect(computeBucketSeverities([normalBucket, criticalBucket], now)).to.deep.equal([
-      { bucket: normalBucket, severity: "normal" },
-      { bucket: criticalBucket, severity: "critical" },
-    ]);
-  });
-
-  it("boundary: returns an empty array for an empty bucket list", () => {
-    expect(computeBucketSeverities([], now)).to.deep.equal([]);
   });
 });

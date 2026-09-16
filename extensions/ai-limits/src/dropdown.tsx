@@ -1,15 +1,10 @@
 import { Color, Icon, MenuBarExtra } from "@raycast/api";
 import * as cache from "./lib/cache";
-import { shouldShowRedeemHint } from "./lib/codex";
-import {
-  computeBucketSeverities,
-  findPrimaryOpenAiBucket,
-  formatResetGerman,
-  formatTimeShort,
-  formatWeekdayAndTime,
-} from "./lib/format";
+import { buildDropdownModel, DropdownBucketRow } from "./lib/dropdown-model";
+import { formatResetGerman, formatWeekdayAndTime } from "./lib/format";
+import { AiLimitsReport } from "./lib/report";
 import { projectLimitHit } from "./lib/projection";
-import { Bucket, Severity } from "./lib/types";
+import { Severity } from "./lib/types";
 
 export function severityColor(severity: Severity): Color {
   if (severity === "critical") {
@@ -21,81 +16,84 @@ export function severityColor(severity: Severity): Color {
   return Color.Green;
 }
 
-function BucketRow({ bucket, severity, now }: { bucket: Bucket; severity: Severity; now: Date }) {
-  const history = cache.getBucketHistory(bucket.id);
-  const projectedLimitHitAt = projectLimitHit(history, bucket.resetsAt, now);
+function BucketRow({ row, now }: { row: DropdownBucketRow; now: Date }) {
+  const history = cache.getBucketHistory(row.key);
+  const projectedLimitHitAt = projectLimitHit(history, row.resetsAt, now);
   const projectionSuffix =
     projectedLimitHitAt === null ? "" : ` · Limit ~${formatWeekdayAndTime(projectedLimitHitAt, now)}`;
 
   return (
     <MenuBarExtra.Item
-      title={`${bucket.label}: ${Math.round(bucket.percent)}%`}
-      subtitle={`Reset ${formatResetGerman(bucket.resetsAt, now)}${projectionSuffix}`}
-      icon={{ source: Icon.Circle, tintColor: severityColor(severity) }}
+      title={`${row.label}: ${Math.round(row.percent)}%`}
+      subtitle={`Reset ${formatResetGerman(row.resetsAt, now)}${projectionSuffix}`}
+      icon={{ source: Icon.Circle, tintColor: severityColor(row.severity) }}
     />
   );
 }
 
 export interface DropdownContentProps {
-  anthropicBuckets: Bucket[];
-  codexBuckets: Bucket[];
-  // One entry per Anthropic limit that failed to parse. Rendered so a partially degraded response
-  // is visible — an unrendered slot would otherwise look identical to an unused limit.
-  anthropicSkipped: string[];
-  // Straight from the live codex.ts load result (the single command always fetches — see
-  // anthropic.tsx) — null simply means this fetch reported no hint / no reset credits.
-  codexHint: string | null;
-  codexResetCreditsAvailable: number | null;
-  lastUpdatedAt: Date | null;
-  staleSuffixText: string;
+  report: AiLimitsReport | null;
+  runError: string | null;
   now: Date;
   onRefresh: () => void;
 }
 
 export function DropdownContent(props: DropdownContentProps) {
-  const anthropicSeverities = computeBucketSeverities(props.anthropicBuckets, props.now);
-  const codexSeverities = computeBucketSeverities(props.codexBuckets, props.now);
-  const primaryCodexBucket = findPrimaryOpenAiBucket(props.codexBuckets);
-  const showResetCredits = props.codexResetCreditsAvailable !== null && props.codexResetCreditsAvailable > 0;
-  const lastUpdatedLabel =
-    props.lastUpdatedAt === null
-      ? "Noch nicht aktualisiert"
-      : `Aktualisiert ${formatTimeShort(props.lastUpdatedAt)}${props.staleSuffixText}`;
+  const model = props.report ? buildDropdownModel(props.report) : null;
 
   return (
     <>
-      <MenuBarExtra.Section title="Claude">
-        {props.anthropicBuckets.length === 0 ? (
-          <MenuBarExtra.Item title="Keine Daten (Keychain-Token fehlt?)" icon={Icon.Warning} />
-        ) : (
-          anthropicSeverities.map(({ bucket, severity }) => (
-            <BucketRow key={bucket.id} bucket={bucket} severity={severity} now={props.now} />
-          ))
-        )}
-        {/* Keyed by index, not by reason: two per-model limits failing the same way produce
-            byte-identical messages, and a duplicate key drops one of the rows. */}
-        {props.anthropicSkipped.map((reason, index) => (
-          <MenuBarExtra.Item key={index} title="Limit nicht lesbar" subtitle={reason} icon={Icon.Warning} />
-        ))}
-      </MenuBarExtra.Section>
+      {model?.accountSections.map((section) => (
+        <MenuBarExtra.Section key={section.title} title={section.title}>
+          {section.rows.map((row) => (
+            <BucketRow key={row.key} row={row} now={props.now} />
+          ))}
+          {/* Keyed by index, not by message: two limits failing the same way produce byte-identical
+              messages, and a duplicate key drops one of the rows. */}
+          {section.errorRows.map((error, index) => (
+            <MenuBarExtra.Item key={`error-${index}`} title="Fehler" subtitle={error.message} icon={Icon.Warning} />
+          ))}
+          {section.skippedRows.map((skipped, index) => (
+            <MenuBarExtra.Item
+              key={`skipped-${index}`}
+              title="Limit nicht lesbar"
+              subtitle={skipped.reason}
+              icon={Icon.Warning}
+            />
+          ))}
+          {section.standLabel && <MenuBarExtra.Item title={section.standLabel} />}
+        </MenuBarExtra.Section>
+      ))}
 
-      <MenuBarExtra.Section title="OpenAI">
-        {props.codexHint && <MenuBarExtra.Item title={props.codexHint} icon={Icon.Warning} />}
-        {props.codexBuckets.length === 0 && !props.codexHint ? (
-          <MenuBarExtra.Item title="Keine Daten (Codex-Login fehlt?)" icon={Icon.Warning} />
-        ) : (
-          codexSeverities.map(({ bucket, severity }) => (
-            <BucketRow key={bucket.id} bucket={bucket} severity={severity} now={props.now} />
-          ))
-        )}
-        {showResetCredits && (
+      {model && (
+        <MenuBarExtra.Section title="OpenAI">
+          {model.codexSection.rows.map((row) => (
+            <BucketRow key={row.key} row={row} now={props.now} />
+          ))}
+          {model.codexSection.errorRows.map((error, index) => (
+            <MenuBarExtra.Item
+              key={`codex-error-${index}`}
+              title="Fehler"
+              subtitle={error.message}
+              icon={Icon.Warning}
+            />
+          ))}
+          {model.codexSection.skippedRows.map((skipped, index) => (
+            <MenuBarExtra.Item
+              key={`codex-skipped-${index}`}
+              title="Limit nicht lesbar"
+              subtitle={skipped.reason}
+              icon={Icon.Warning}
+            />
+          ))}
           <MenuBarExtra.Item
-            title={`Reset-Credits: ${props.codexResetCreditsAvailable} verfügbar`}
+            title={model.codexSection.resetCreditsLabel}
+            subtitle={model.codexSection.resetCreditsSubtitle ?? undefined}
             icon={Icon.Coins}
-            subtitle={shouldShowRedeemHint(primaryCodexBucket) ? "Einlösen: codex → /usage" : undefined}
           />
-        )}
-      </MenuBarExtra.Section>
+          {model.codexSection.standLabel && <MenuBarExtra.Item title={model.codexSection.standLabel} />}
+        </MenuBarExtra.Section>
+      )}
 
       <MenuBarExtra.Section>
         <MenuBarExtra.Item
@@ -104,7 +102,9 @@ export function DropdownContent(props: DropdownContentProps) {
           onAction={props.onRefresh}
           shortcut={{ modifiers: ["cmd"], key: "r" }}
         />
-        <MenuBarExtra.Item title={lastUpdatedLabel} />
+        {props.runError && (
+          <MenuBarExtra.Item title="ai-limits fehlgeschlagen" subtitle={props.runError} icon={Icon.Warning} />
+        )}
       </MenuBarExtra.Section>
     </>
   );

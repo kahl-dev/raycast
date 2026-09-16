@@ -1,211 +1,142 @@
-import { isWithinAnthropicCooldown, loadAnthropicBuckets } from "./anthropic";
-import { CodexAuthTokens, isWithinCodexCooldown, loadCodexBuckets } from "./codex";
 import { appendHistory, HistoryPoint } from "./projection";
+import { AiLimitsReport, parseAiLimitsReport, ReportBucket } from "./report";
 import {
+  AlertBucket,
   determineAlertsToFire,
   determineResetEvents,
   formatAlertMessage,
   formatResetMessage,
   markAlertsFired,
   pruneFiredKeys,
+  selectAlertsToNotify,
 } from "./thresholds";
-import { Bucket, FetchFunction, Provider } from "./types";
+import { toError } from "./types";
 
-// Mirrors the subset of cache.ts (Raycast's `Cache`-backed storage) that loadUsageData reads
-// and writes — kept as its own interface so tests can supply a plain in-memory fake instead of
+// Mirrors the subset of cache.ts (Raycast's `Cache`-backed storage) that loadUsageData reads and
+// writes — kept as its own interface so tests can supply a plain in-memory fake instead of
 // touching the real Raycast Cache.
 export interface LoadCacheDependencies {
-  getLastAnthropicAttemptAt: () => Date | null;
-  setLastAnthropicAttemptAt: (date: Date) => void;
-  getLastCodexAttemptAt: () => Date | null;
-  setLastCodexAttemptAt: (date: Date) => void;
-  getLastCodexLoginAttemptAt: () => Date | null;
-  setLastCodexLoginAttemptAt: (date: Date) => void;
-  getLastGoodBuckets: (provider: Provider) => Bucket[] | null;
-  setLastGoodBuckets: (provider: Provider, buckets: Bucket[]) => void;
-  getLastCodexResetCreditsAvailable: () => number | null;
-  setLastCodexResetCreditsAvailable: (value: number | null) => void;
-  getLastAnthropicSkipped: () => string[];
-  setLastAnthropicSkipped: (reasons: string[]) => void;
+  getLastGoodReport: () => AiLimitsReport | null;
+  setLastGoodReport: (report: AiLimitsReport) => void;
+  getLastObservedAt: (bucketKey: string) => Date | null;
+  setLastObservedAt: (bucketKey: string, date: Date) => void;
   getFiredAlertKeys: () => Set<string>;
   setFiredAlertKeys: (keys: Set<string>) => void;
-  getLastUpdatedAt: () => Date | null;
-  setLastUpdatedAt: (date: Date) => void;
-  getBucketHistory: (bucketId: string) => HistoryPoint[];
-  setBucketHistory: (bucketId: string, history: HistoryPoint[]) => void;
+  getBucketHistory: (bucketKey: string) => HistoryPoint[];
+  setBucketHistory: (bucketKey: string, history: HistoryPoint[]) => void;
 }
 
 export interface LoadDependencies {
   now: () => Date;
   cache: LoadCacheDependencies;
-  readToken: () => Promise<string>;
-  readAuth: () => Promise<CodexAuthTokens>;
-  runLoginStatus: () => Promise<void>;
-  fetchImplementation: FetchFunction;
+  runAiLimits: () => Promise<unknown>;
   notify: (title: string, message: string) => Promise<void>;
 }
 
 export interface UsageSnapshot {
-  anthropicBuckets: Bucket[];
-  codexBuckets: Bucket[];
-  // Limits the Anthropic API returned that could not be parsed. Rendered in the dropdown so a
-  // partially degraded response is visible rather than looking like a missing/unused limit.
-  anthropicSkipped: string[];
-  codexHint: string | null;
-  codexResetCreditsAvailable: number | null;
-  lastUpdatedAt: Date;
-  anthropicStale: boolean;
-  codexStale: boolean;
+  report: AiLimitsReport | null;
+  runError: string | null;
 }
 
-export interface LoadOptions {
-  // Set by the manual "Aktualisieren" action: bypasses both cooldown gates. Without it a refresh
-  // is a guaranteed no-op, because merely opening the menu already runs a load and burns the gate.
-  force?: boolean;
+// Adapts a report bucket down to the minimal AlertBucket shape thresholds.ts reads, fed an `id`
+// that is the report's account-scoped `key` (so alerts/resets dedup per account, not just per
+// bucket id) and a `label` that carries the account prefix the notification text needs.
+function toNotificationBucket(bucket: ReportBucket): AlertBucket {
+  const prefix = bucket.provider === "codex" ? "Codex" : bucket.account;
+  return {
+    id: bucket.key,
+    label: `${prefix} · ${bucket.label}`,
+    percent: bucket.percent,
+    resetsAt: bucket.resetsAt,
+  };
 }
 
-// Appends one history point per bucket for the burn-rate projection (projection.ts) — called only
-// for a genuinely fresh, successful fetch (same guard as the setLastGoodBuckets writes above/below),
-// so a cooldown-skip or failed fetch never records a duplicate or stale point.
-// A limit that failed to parse produces no fresh value for its id. Carrying the last-good entry
-// keeps three things from breaking at once: the cache is not destroyed by a fully unreadable
-// response, the slot keeps showing its last known value instead of blanking, and the id stays
-// visible to pruneFiredKeys — without which a single bad tick drops the fired-alert keys and the
-// 80/95 alerts fire again the moment the API recovers.
-function mergeOverLastGood(fresh: Bucket[], lastGood: Bucket[] | null): Bucket[] {
-  if (lastGood === null) {
-    return fresh;
+// Alerts, key-pruning and reset detection must never react to a bucket reported at an observedAt
+// OLDER than the same-key bucket in the baseline report: after a 429 backoff ai-limits can fall
+// back from a newer statusline snapshot to an older cache entry, and treating that older reading as
+// new would announce a false reset and re-arm alerts. An equal observedAt is the same measurement
+// served again, which the alert and reset logic already handles idempotently. A bucket with no
+// baseline counterpart (first sighting, or back after being absent) counts as fresh.
+function isFreshBucket(bucket: ReportBucket, baselineBuckets: ReportBucket[]): boolean {
+  const baselineBucket = baselineBuckets.find((entry) => entry.key === bucket.key);
+  if (baselineBucket === undefined) {
+    return true;
   }
-  const freshIds = new Set(fresh.map((bucket) => bucket.id));
-  return [...fresh, ...lastGood.filter((bucket) => !freshIds.has(bucket.id))];
+  return bucket.observedAt.getTime() >= baselineBucket.observedAt.getTime();
 }
 
-function recordHistory(cache: LoadCacheDependencies, buckets: Bucket[], now: Date): void {
+// A history point is recorded only for a bucket whose observedAt genuinely advanced since the last
+// recorded point for that key — replaces the old "only a fresh, successful fetch" guard with a
+// per-bucket freshness check driven by the report's own observed_at, which makes a duplicate
+// render (same report served twice) a harmless no-op instead of a second, identical point.
+function recordHistoryIfAdvanced(cache: LoadCacheDependencies, buckets: ReportBucket[], now: Date): void {
   for (const bucket of buckets) {
-    const history = cache.getBucketHistory(bucket.id);
-    cache.setBucketHistory(bucket.id, appendHistory(history, { at: now, percent: bucket.percent }, now));
+    const lastObservedAt = cache.getLastObservedAt(bucket.key);
+    if (lastObservedAt !== null && lastObservedAt.getTime() >= bucket.observedAt.getTime()) {
+      continue;
+    }
+    cache.setLastObservedAt(bucket.key, bucket.observedAt);
+    const history = cache.getBucketHistory(bucket.key);
+    cache.setBucketHistory(bucket.key, appendHistory(history, { at: bucket.observedAt, percent: bucket.percent }, now));
   }
 }
 
-export async function loadUsageData(deps: LoadDependencies, options: LoadOptions = {}): Promise<UsageSnapshot> {
+export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapshot> {
   const now = deps.now();
-  const force = options.force === true;
 
-  // Captured before the fetch so reset-window detection below can diff "what we had before this
-  // call" against "what we have now" for the same bucket id, independent of whether this call's
-  // fetch actually succeeded (a cooldown-skip or failure falls back to this same snapshot, so the
-  // diff naturally comes out empty in that case).
-  const previousAnthropicBuckets = deps.cache.getLastGoodBuckets("anthropic");
-  const previousCodexBuckets = deps.cache.getLastGoodBuckets("openai");
-
-  // Both gates are evaluated and their attempt timestamps written BEFORE any await. Two renders of
-  // the same menu-bar command start loadUsageData milliseconds apart; when the timestamp was only
-  // written after the fetch resolved, both calls read the stale timestamp, both passed the gate and
-  // both hit the network — visible as duplicate history points ~5ms apart, at double the request
-  // rate against an endpoint that allows ~1 req/min.
-  const anthropicAllowed = force || !isWithinAnthropicCooldown(deps.cache.getLastAnthropicAttemptAt(), now);
-  const codexAllowed = force || !isWithinCodexCooldown(deps.cache.getLastCodexAttemptAt(), now);
-  if (anthropicAllowed) {
-    deps.cache.setLastAnthropicAttemptAt(now);
-  }
-  if (codexAllowed) {
-    deps.cache.setLastCodexAttemptAt(now);
+  let raw: unknown;
+  try {
+    raw = await deps.runAiLimits();
+  } catch (error) {
+    return { report: deps.cache.getLastGoodReport(), runError: toError(error).message };
   }
 
-  // Anthropic and Codex are independent APIs — running them concurrently halves wall-clock latency.
-  const [anthropicResult, codexResult] = await Promise.all([
-    loadAnthropicBuckets({
-      skipFetch: !anthropicAllowed,
-      lastGoodBuckets: previousAnthropicBuckets,
-      readToken: () => deps.readToken(),
-      fetchImplementation: deps.fetchImplementation,
-    }),
-    loadCodexBuckets({
-      now: () => now,
-      skipFetch: !codexAllowed,
-      lastLoginAttemptAt: deps.cache.getLastCodexLoginAttemptAt(),
-      lastGoodBuckets: previousCodexBuckets,
-      readAuth: () => deps.readAuth(),
-      fetchImplementation: deps.fetchImplementation,
-      runLoginStatus: () => deps.runLoginStatus(),
-    }),
-  ]);
+  let report: AiLimitsReport;
+  try {
+    report = parseAiLimitsReport(raw);
+  } catch (error) {
+    return { report: deps.cache.getLastGoodReport(), runError: toError(error).message };
+  }
 
-  // Re-read the baseline AFTER the awaits and BEFORE the last-good writes below. A forced refresh
-  // can run concurrently with the interval or mount load (force deliberately bypasses the gate that
-  // otherwise collapses them), and a baseline captured before the fetch would be the same pre-reset
-  // snapshot for both — so both would announce the same reset. Reading here means whichever load
-  // settles first advances the baseline and the other sees no drop.
-  const baselineAnthropicBuckets = deps.cache.getLastGoodBuckets("anthropic");
-  const baselineCodexBuckets = deps.cache.getLastGoodBuckets("openai");
+  // Read AFTER the runner await, BEFORE persisting this call's own report: a concurrent
+  // loadUsageData call can finish first and write a fresher last-good report while this call's own
+  // fetch is still in flight, and reading the baseline only now means the diff below sees that
+  // write instead of a pre-fetch snapshot both concurrent calls would otherwise share.
+  const baselineReport = deps.cache.getLastGoodReport();
+  deps.cache.setLastGoodReport(report);
 
-  if (anthropicResult.error) {
-    console.error("AI Limits: Anthropic-Fetch fehlgeschlagen", anthropicResult.error);
-  }
-  // Guarded on `attempted` (mirrored by the Codex block below): a cooldown-skipped call also
-  // reports error:null while merely forwarding the possibly-null cached value — writing that back
-  // would overwrite a genuine "never fetched yet" (null) cache entry with an empty array.
-  const isFreshAnthropicSuccess = anthropicResult.attempted && anthropicResult.error === null;
-  const freshAnthropicBuckets = anthropicResult.buckets ?? [];
-  const anthropicBuckets = isFreshAnthropicSuccess
-    ? mergeOverLastGood(freshAnthropicBuckets, baselineAnthropicBuckets)
-    : freshAnthropicBuckets;
-  if (isFreshAnthropicSuccess) {
-    deps.cache.setLastGoodBuckets("anthropic", anthropicBuckets);
-    // Only the freshly parsed buckets get a history point — a carried-over value is a repeat of an
-    // old measurement, and feeding it in would flatten the burn-rate slope with invented data.
-    recordHistory(deps.cache, freshAnthropicBuckets, now);
-    deps.cache.setLastAnthropicSkipped(anthropicResult.skipped);
-  }
-  // Mirrors the codexResetCreditsAvailable fallback below: a cooldown-skip or failure produces no
-  // fresh parse, so the reasons come from the cache and the dropdown's warning row stays put for as
-  // long as the degradation does.
-  const anthropicSkipped = isFreshAnthropicSuccess
-    ? anthropicResult.skipped
-    : deps.cache.getLastAnthropicSkipped();
+  recordHistoryIfAdvanced(deps.cache, report.buckets, now);
 
-  if (codexResult.loginAttempted) {
-    deps.cache.setLastCodexLoginAttemptAt(now);
-  }
-  if (codexResult.error) {
-    console.error("AI Limits: Codex-Fetch fehlgeschlagen", codexResult.error);
-  }
-  const codexBuckets = codexResult.buckets ?? [];
-  // Guarded on `attempted` (mirrors the Anthropic block above): now that Codex also has a 60s
-  // cooldown gate (codex.ts), a cooldown-skipped call reports error:null while merely forwarding
-  // the possibly-null cached value — writing that back would overwrite a genuine "never fetched
-  // yet" (null) cache entry with an empty array. This write was previously unguarded because every
-  // call attempted the network; the new skip path makes the guard necessary, same as Anthropic.
-  const isFreshCodexSuccess = codexResult.attempted && codexResult.error === null;
-  if (isFreshCodexSuccess) {
-    deps.cache.setLastGoodBuckets("openai", codexBuckets);
-    recordHistory(deps.cache, codexBuckets, now);
-    deps.cache.setLastCodexResetCreditsAvailable(codexResult.resetCreditsAvailable);
-  }
-  // codex.ts reports resetCreditsAvailable:null for both the cooldown-skip and the failure-fallback
-  // path (it never re-derives a stale count from an old response) — falling back to the cached
-  // last-good value here means the dropdown's "Reset-Credits" row does not flicker away on every
-  // cooldown-skipped tick or transient failure, mirroring how buckets already fall back above.
-  const codexResetCreditsAvailable = isFreshCodexSuccess
-    ? codexResult.resetCreditsAvailable
-    : deps.cache.getLastCodexResetCreditsAvailable();
-
-  const allBuckets = [...anthropicBuckets, ...codexBuckets];
-  const previousAllBuckets = [...(baselineAnthropicBuckets ?? []), ...(baselineCodexBuckets ?? [])];
+  const baselineReportBuckets = baselineReport === null ? [] : baselineReport.buckets;
+  const freshBuckets = report.buckets
+    .filter((bucket) => isFreshBucket(bucket, baselineReportBuckets))
+    .map(toNotificationBucket);
+  const baselineBuckets = baselineReportBuckets.map(toNotificationBucket);
 
   const firedBefore = deps.cache.getFiredAlertKeys();
-  const prunedFired = pruneFiredKeys(firedBefore, allBuckets);
-  const alertsToFire = determineAlertsToFire(allBuckets, prunedFired);
+  const prunedFired = pruneFiredKeys(firedBefore, freshBuckets);
+  const alertsToFire = determineAlertsToFire(freshBuckets, prunedFired);
+  // Every crossed threshold is marked fired, but at most one (the highest) is notified per bucket.
+  const alertsToNotify = selectAlertsToNotify(alertsToFire);
 
-  // Reset events carry no dedup state: they are a one-shot percent drop, and firing makes the
-  // post-reset value the baseline for the next comparison (see thresholds.ts).
-  const resetEventsToFire = determineResetEvents(previousAllBuckets, allBuckets);
+  // Reset events carry no dedup state (thresholds.ts): firing makes the post-reset value the next
+  // baseline, so the same reset cannot fire twice.
+  const resetEventsToFire = determineResetEvents(baselineBuckets, freshBuckets);
 
-  // allSettled (not all): a failed osascript call must not throw out of loadUsageData — that
-  // would discard the already-fetched, already-cached buckets and skip persisting fired-keys,
-  // for a display failure unrelated to whether the data itself is good.
+  // Persisted BEFORE the notify await (not after): two overlapping loads (interval tick +
+  // "Aktualisieren") both run their synchronous part up to this point before either suspends on
+  // notify, so a write here — not after the await — is what a second overlapping call resumes into
+  // and reads as already-fired. Trade-off accepted: a failed osascript notification (logged below)
+  // no longer re-fires on the next run, since the key is marked fired regardless of delivery.
+  if (alertsToFire.length > 0 || prunedFired.size !== firedBefore.size) {
+    deps.cache.setFiredAlertKeys(markAlertsFired(prunedFired, alertsToFire));
+  }
+
+  // allSettled (not all): a failed osascript call must not throw out of loadUsageData — that would
+  // discard the already-fetched, already-cached report for a display failure unrelated to whether
+  // the data itself is good.
   const notificationResults = await Promise.allSettled([
-    ...alertsToFire.map((alert) => deps.notify("AI Limits", formatAlertMessage(alert.bucket, alert.threshold, now))),
+    ...alertsToNotify.map((alert) => deps.notify("AI Limits", formatAlertMessage(alert.bucket, alert.threshold, now))),
     ...resetEventsToFire.map((event) => deps.notify("AI Limits", formatResetMessage(event.bucket))),
   ]);
   for (const result of notificationResults) {
@@ -213,45 +144,6 @@ export async function loadUsageData(deps: LoadDependencies, options: LoadOptions
       console.error("AI Limits: Notification fehlgeschlagen", result.reason);
     }
   }
-  if (alertsToFire.length > 0 || prunedFired.size !== firedBefore.size) {
-    deps.cache.setFiredAlertKeys(markAlertsFired(prunedFired, alertsToFire));
-  }
 
-  // A skipped limit means part of the answer is a carried-over value, so the snapshot is not fully
-  // fresh — without this the veraltet marker disappears while stale numbers are on screen.
-  const anthropicStale = anthropicResult.error !== null || anthropicSkipped.length > 0;
-  const codexStale = codexResult.error !== null;
-  const isStale = anthropicStale || codexStale;
-  const lastUpdatedAt = isStale ? (deps.cache.getLastUpdatedAt() ?? now) : now;
-  if (!isStale) {
-    deps.cache.setLastUpdatedAt(now);
-  }
-
-  if (anthropicSkipped.length > 0) {
-    console.error("AI Limits: Anthropic-Limits übersprungen", anthropicSkipped);
-  }
-
-  return {
-    anthropicBuckets,
-    codexBuckets,
-    anthropicSkipped,
-    codexHint: codexResult.hint,
-    codexResetCreditsAvailable,
-    lastUpdatedAt,
-    anthropicStale,
-    codexStale,
-  };
-}
-
-export function staleSuffix(snapshot: UsageSnapshot): string {
-  if (snapshot.anthropicStale && snapshot.codexStale) {
-    return " (veraltet)";
-  }
-  if (snapshot.anthropicStale) {
-    return " (Claude veraltet)";
-  }
-  if (snapshot.codexStale) {
-    return " (OpenAI veraltet)";
-  }
-  return "";
+  return { report, runError: null };
 }

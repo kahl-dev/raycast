@@ -1,171 +1,122 @@
 import { describe, expect, it } from "vitest";
-import { bucket } from "./__fixtures__/bucket";
+import { aiLimitsReport, reportAccount, reportBucket } from "./__fixtures__/report";
 import { buildMenuBarTitle } from "./menu-bar-title";
 
-// Every fixed character asserted via explicit \u escape (not the literal glyph) so a test failure
-// or a diff never hides an accidental substitution of a visually similar character for the wrong
-// codepoint.
-const THIN_SPACE = " "; // U+2009 THIN SPACE — the slot separator
-const DASH = "–"; // U+2013 EN DASH — missing-bucket placeholder
-const SESSION_LABEL = "ˢ"; // U+02E2 MODIFIER LETTER SMALL S
-const WEEKLY_ALL_LABEL = "ᵂ"; // U+1D42 MODIFIER LETTER CAPITAL W
-const WEEKLY_SCOPED_LABEL = "ᶠ"; // U+1DA0 MODIFIER LETTER SMALL F WITH HOOK
-const OPENAI_PRIMARY_LABEL = "ᴳ"; // U+1D33 MODIFIER LETTER CAPITAL G
+const THIN_SPACE = "\u2009";
+const DASH = "\u2013";
+const CODEX_LABEL = "\u1D33";
 
-function expectedTitle(session: string, weeklyAll: string, weeklyScoped: string, openAiPrimary: string): string {
-  return [session, weeklyAll, weeklyScoped, openAiPrimary].join(THIN_SPACE);
+function weeklyAllBucket(account: string, percent: number) {
+  return reportBucket({
+    key: `anthropic:${account}:anthropic.weekly_all`,
+    id: "anthropic.weekly_all",
+    provider: "anthropic",
+    account,
+    percent,
+  });
 }
 
-function normalBucket(id: string, percent: number, overrides: Partial<Parameters<typeof bucket>[0]> = {}) {
-  return bucket({ id, percent, ...overrides });
+function codexPrimaryBucket(percent: number) {
+  return reportBucket({
+    key: "codex:default:codex.primary",
+    id: "codex.primary",
+    provider: "codex",
+    account: "default",
+    percent,
+  });
 }
 
 describe("buildMenuBarTitle", () => {
-  it("full-string example: all four slots present", () => {
-    const buckets = [
-      normalBucket("anthropic:session", 29),
-      normalBucket("anthropic:weekly_all", 36),
-      normalBucket("anthropic:weekly_scoped:fable", 20),
-      normalBucket("openai:primary", 0, { provider: "openai" }),
+  it("three accounts plus codex: byte-exact title with superscript labels and thin-space separators", () => {
+    const report = aiLimitsReport({
+      accounts: [
+        reportAccount({ name: "work", label: "w" }),
+        reportAccount({ name: "private", label: "p" }),
+        reportAccount({ name: "work-2", label: "2" }),
+      ],
+      buckets: [weeklyAllBucket("work", 85), weeklyAllBucket("private", 0), weeklyAllBucket("work-2", 0)],
+    });
+    const withCodex = { ...report, buckets: [...report.buckets, codexPrimaryBucket(100)] };
+    const title = buildMenuBarTitle(withCodex);
+    const expected = ["ʷ85", "ᵖ0", "²0", `${CODEX_LABEL}100`].join(THIN_SPACE);
+    expect(title).to.equal(expected);
+  });
+
+  it("account without a weekly_all bucket shows the dash placeholder for its slot", () => {
+    const report = aiLimitsReport({
+      accounts: [reportAccount({ name: "work", label: "w" }), reportAccount({ name: "private", label: "p" })],
+      buckets: [weeklyAllBucket("work", 85)],
+    });
+    const title = buildMenuBarTitle(report);
+    expect(title).to.equal(["ʷ85", `ᵖ${DASH}`, `${CODEX_LABEL}${DASH}`].join(THIN_SPACE));
+  });
+
+  it("no codex bucket present shows the dash placeholder for the G slot", () => {
+    const report = aiLimitsReport({
+      accounts: [reportAccount({ name: "work", label: "w" })],
+      buckets: [weeklyAllBucket("work", 85)],
+    });
+    const title = buildMenuBarTitle(report);
+    expect(title).to.equal(["ʷ85", `${CODEX_LABEL}${DASH}`].join(THIN_SPACE));
+  });
+
+  it("five accounts render five slots plus codex, in accounts[] order", () => {
+    const accounts = [
+      reportAccount({ name: "a1", label: "a" }),
+      reportAccount({ name: "a2", label: "b" }),
+      reportAccount({ name: "a3", label: "c" }),
+      reportAccount({ name: "a4", label: "d" }),
+      reportAccount({ name: "a5", label: "e" }),
     ];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}29`,
-        `${WEEKLY_ALL_LABEL}36`,
-        `${WEEKLY_SCOPED_LABEL}20`,
-        `${OPENAI_PRIMARY_LABEL}0`,
-      ),
-    );
-  });
-
-  it("uses the exact superscript codepoints for each of the four slot labels", () => {
     const buckets = [
-      normalBucket("anthropic:session", 1),
-      normalBucket("anthropic:weekly_all", 2),
-      normalBucket("anthropic:weekly_scoped:fable", 3),
-      normalBucket("openai:primary", 4, { provider: "openai" }),
+      weeklyAllBucket("a1", 10),
+      weeklyAllBucket("a2", 20),
+      weeklyAllBucket("a3", 30),
+      weeklyAllBucket("a4", 40),
+      weeklyAllBucket("a5", 50),
+      codexPrimaryBucket(60),
     ];
-    const title = buildMenuBarTitle(buckets);
-    expect(title).to.include(`${SESSION_LABEL}1`);
-    expect(title).to.include(`${WEEKLY_ALL_LABEL}2`);
-    expect(title).to.include(`${WEEKLY_SCOPED_LABEL}3`);
-    expect(title).to.include(`${OPENAI_PRIMARY_LABEL}4`);
+    const report = aiLimitsReport({ accounts, buckets });
+    const title = buildMenuBarTitle(report);
+    expect(title).to.equal(["ᵃ10", "ᵇ20", "ᶜ30", "ᵈ40", "ᵉ50", `${CODEX_LABEL}60`].join(THIN_SPACE));
   });
 
-  it("joins the four slots with exactly one THIN SPACE (U+2009) each", () => {
-    const buckets = [normalBucket("anthropic:session", 1)];
-    const title = buildMenuBarTitle(buckets);
-    expect(title.split(THIN_SPACE).length - 1).to.equal(3);
-    expect(title.includes(" ")).to.equal(false); // no regular ASCII space (U+0020) anywhere
+  it("a digit label renders with the corresponding superscript digit", () => {
+    const report = aiLimitsReport({
+      accounts: [reportAccount({ name: "work-2", label: "2" })],
+      buckets: [weeklyAllBucket("work-2", 7)],
+    });
+    expect(buildMenuBarTitle(report)).to.equal(["²7", `${CODEX_LABEL}${DASH}`].join(THIN_SPACE));
   });
 
-  it("boundary: every slot shows the dash placeholder for an empty bucket list", () => {
-    expect(buildMenuBarTitle([])).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}${DASH}`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
+  it("rounds each slot's percent (Math.round)", () => {
+    const report = aiLimitsReport({
+      accounts: [reportAccount({ name: "work", label: "w" })],
+      buckets: [weeklyAllBucket("work", 84.5)],
+    });
+    expect(buildMenuBarTitle(report)).to.equal(["ʷ85", `${CODEX_LABEL}${DASH}`].join(THIN_SPACE));
   });
 
-  it("missing-slot combination: only the session bucket present", () => {
-    const buckets = [normalBucket("anthropic:session", 29)];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}29`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
+  it("boundary: empty accounts and no codex bucket shows only the G dash slot", () => {
+    const report = aiLimitsReport({ accounts: [], buckets: [] });
+    expect(buildMenuBarTitle(report)).to.equal(`${CODEX_LABEL}${DASH}`);
   });
 
-  it("missing-slot combination: only the weekly_all bucket present", () => {
-    const buckets = [normalBucket("anthropic:weekly_all", 36)];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}${DASH}`,
-        `${WEEKLY_ALL_LABEL}36`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
+  it("throws for an account label outside the [a-pr-z0-9] table", () => {
+    const report = aiLimitsReport({
+      accounts: [reportAccount({ name: "work", label: "q" })],
+      buckets: [],
+    });
+    expect(() => buildMenuBarTitle(report)).toThrow();
   });
 
-  it("missing-slot combination: only a weekly_scoped bucket present", () => {
-    const buckets = [normalBucket("anthropic:weekly_scoped:opus", 52)];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}${DASH}`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}52`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
-  });
-
-  it("missing-slot combination: only openai:primary present", () => {
-    const buckets = [normalBucket("openai:primary", 4, { provider: "openai" })];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}${DASH}`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}4`,
-      ),
-    );
-  });
-
-  it("picks the highest-percent weekly_scoped bucket for the F slot, not the first one found", () => {
-    const buckets = [
-      normalBucket("anthropic:weekly_scoped:fable", 20),
-      normalBucket("anthropic:weekly_scoped:opus", 52),
-    ];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}${DASH}`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}52`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
-  });
-
-  it("rounds each slot's percent (Math.round), no percent sign", () => {
-    const buckets = [normalBucket("anthropic:session", 28.5)];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}29`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
-  });
-
-  it("rounds down below .5", () => {
-    const buckets = [normalBucket("anthropic:session", 28.4)];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}28`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
-  });
-
-  it("ignores openai:secondary — only openai:primary feeds the G slot", () => {
-    const buckets = [normalBucket("openai:secondary", 90, { provider: "openai" })];
-    expect(buildMenuBarTitle(buckets)).to.equal(
-      expectedTitle(
-        `${SESSION_LABEL}${DASH}`,
-        `${WEEKLY_ALL_LABEL}${DASH}`,
-        `${WEEKLY_SCOPED_LABEL}${DASH}`,
-        `${OPENAI_PRIMARY_LABEL}${DASH}`,
-      ),
-    );
+  it("joins slots with exactly one THIN SPACE (U+2009) each, never a regular space", () => {
+    const report = aiLimitsReport({
+      accounts: [reportAccount({ name: "work", label: "w" }), reportAccount({ name: "private", label: "p" })],
+      buckets: [weeklyAllBucket("work", 1), weeklyAllBucket("private", 2)],
+    });
+    const title = buildMenuBarTitle(report);
+    expect(title.split(THIN_SPACE).length - 1).to.equal(2);
+    expect(title.includes(" ")).to.equal(false);
   });
 });

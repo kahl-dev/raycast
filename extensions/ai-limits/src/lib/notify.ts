@@ -1,4 +1,16 @@
-import { ExecFileFunction, defaultExecFile } from "./exec";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+export interface ExecFileResult {
+  stdout: string;
+  stderr: string;
+}
+
+export type ExecFileFunction = (file: string, args: string[]) => Promise<ExecFileResult>;
+
+const execFileAsync = promisify(execFile);
+
+export const defaultExecFile: ExecFileFunction = (file, args) => execFileAsync(file, args);
 
 // osascript concatenates the escaped string back into a double-quoted AppleScript literal,
 // so backslashes must be escaped first — otherwise an escaped quote's leading backslash would

@@ -1,4 +1,4 @@
-import { Bucket, displaySeverity, secondsUntil, Severity } from "./types";
+import { secondsUntil } from "./types";
 
 const WEEKDAY_LABELS_GERMAN = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
@@ -49,47 +49,4 @@ export function formatResetGerman(date: Date, now: Date = new Date()): string {
   }
 
   return `${base} (in ${formatDurationShort(secondsUntilReset)})`;
-}
-
-export interface BucketSeverity {
-  bucket: Bucket;
-  severity: Severity;
-}
-
-// Precomputes displaySeverity once per bucket so a dropdown render needing each bucket's own
-// severity (BucketRow's dot color, dropdown.tsx) does not recompute displaySeverity redundantly.
-export function computeBucketSeverities(buckets: Bucket[], now: Date): BucketSeverity[] {
-  return buckets.map((bucket) => ({ bucket, severity: displaySeverity(bucket, now) }));
-}
-
-// Exported for reuse by menu-bar-title.ts (the menu-bar title's "F" slot uses the same
-// highest-percent reduction, applied to a pre-filtered weekly_scoped subset).
-export function highestPercentBucket(buckets: Bucket[]): Bucket | null {
-  if (buckets.length === 0) {
-    return null;
-  }
-  return buckets.reduce((highest, current) => (current.percent > highest.percent ? current : highest));
-}
-
-function findBucketById(buckets: Bucket[], id: string): Bucket | null {
-  return buckets.find((bucket) => bucket.id === id) ?? null;
-}
-
-// Exported for reuse by menu-bar-title.ts (each of the menu-bar title's four fixed slots is
-// exactly one of these fixed-id lookups) and dropdown.tsx (the OpenAI reset-credits row needs the
-// primary bucket specifically).
-export function findSessionBucket(buckets: Bucket[]): Bucket | null {
-  return findBucketById(buckets, "anthropic:session");
-}
-
-export function findWeeklyAllBucket(buckets: Bucket[]): Bucket | null {
-  return findBucketById(buckets, "anthropic:weekly_all");
-}
-
-export function findHighestWeeklyScopedBucket(buckets: Bucket[]): Bucket | null {
-  return highestPercentBucket(buckets.filter((bucket) => bucket.id.startsWith("anthropic:weekly_scoped:")));
-}
-
-export function findPrimaryOpenAiBucket(buckets: Bucket[]): Bucket | null {
-  return findBucketById(buckets, "openai:primary");
 }

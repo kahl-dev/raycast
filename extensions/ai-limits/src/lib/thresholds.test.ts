@@ -10,9 +10,9 @@ import {
   pruneFiredKeys,
 } from "./thresholds";
 import { bucket as baseBucket } from "./__fixtures__/bucket";
-import { Bucket } from "./types";
+import { AlertBucket } from "./thresholds";
 
-function bucket(overrides: Partial<Bucket>): Bucket {
+function bucket(overrides: Partial<AlertBucket>): AlertBucket {
   return baseBucket({
     id: "anthropic:weekly_scoped:fable",
     label: "Fable",
@@ -116,21 +116,11 @@ describe("pruneFiredKeys", () => {
     expect(pruneFiredKeys(fired, [b])).to.deep.equal(new Set([alertKey(b.id, 80)]));
   });
 
-  it("drops keys for buckets that no longer exist at all", () => {
-    const gone = bucket({ id: "anthropic:weekly_scoped:retired" });
+  it("keeps keys for buckets absent from the observed list", () => {
+    const gone = bucket({ id: "anthropic:work:anthropic.weekly.fable" });
     const fired = new Set([alertKey(gone.id, 80)]);
 
-    expect(pruneFiredKeys(fired, [])).to.deep.equal(new Set());
-  });
-
-  it("drops a stale key left over from an older key format", () => {
-    // Reset events no longer use firedAlertKeys at all (they are derived from a percent drop, which
-    // cannot repeat for the same reset). Any leftover reset: key from an older build is simply not
-    // retained, because it matches no alert key of any current bucket.
-    const b = bucket({ percent: 5 });
-    const fired = new Set(["reset:" + b.id]);
-
-    expect(pruneFiredKeys(fired, [b])).to.deep.equal(new Set());
+    expect(pruneFiredKeys(fired, [])).to.deep.equal(new Set([alertKey(gone.id, 80)]));
   });
 });
 
@@ -209,9 +199,9 @@ describe("determineResetEvents", () => {
     expect(determineResetEvents([previous], [])).to.deep.equal([]);
   });
 
-  it("matches previous and current buckets by id only, across otherwise different providers/labels", () => {
-    const previous = bucket({ id: "openai:primary", provider: "openai", percent: 100 });
-    const current = bucket({ id: "openai:primary", provider: "openai", percent: 0 });
+  it("matches previous and current buckets by id only, across otherwise different labels", () => {
+    const previous = bucket({ id: "openai:primary", label: "Primary", percent: 100 });
+    const current = bucket({ id: "openai:primary", label: "Primary Codex", percent: 0 });
 
     expect(determineResetEvents([previous], [current])).to.deep.equal([{ bucket: current }]);
   });

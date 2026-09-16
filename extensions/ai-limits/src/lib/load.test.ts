@@ -1,860 +1,480 @@
 import { describe, expect, it, vi } from "vitest";
-import { bucket } from "./__fixtures__/bucket";
-import codexFixture from "./__fixtures__/codex-usage.json";
-import { jsonResponse } from "./__fixtures__/response";
-import { parseCodexUsage } from "./codex";
+import { aiLimitsReport, reportAccount, reportBucket } from "./__fixtures__/report";
 import { LoadCacheDependencies, loadUsageData } from "./load";
 import { HistoryPoint } from "./projection";
-import { Bucket, Provider } from "./types";
+import { AiLimitsReport } from "./report";
 
 interface FakeCacheStore {
-  lastAnthropicAttemptAt: Date | null;
-  lastCodexAttemptAt: Date | null;
-  lastCodexLoginAttemptAt: Date | null;
-  lastGoodAnthropicBuckets: Bucket[] | null;
-  lastGoodCodexBuckets: Bucket[] | null;
+  lastGoodReport: AiLimitsReport | null;
+  lastObservedAt: Record<string, Date | null>;
   firedAlertKeys: Set<string>;
-  lastUpdatedAt: Date | null;
   bucketHistory: Record<string, HistoryPoint[]>;
-  lastCodexResetCreditsAvailable: number | null;
-  lastAnthropicSkipped: string[];
 }
 
-// Map-backed in-memory fake — no module mocking. The `vi.fn` wrapper keeps the fake introspectable
-// (call counts/args) while behaving like a real cache: writes are visible to subsequent reads on
-// the same instance, which is what the alert-dedup and cooldown-skip invariants below rely on.
+// Map-backed in-memory fake — no module mocking. Mirrors the real cache.ts contract used by
+// load.ts: writes on this instance are immediately visible to subsequent reads on the same
+// instance, which is what the concurrent-load and dedup invariants below rely on.
 function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDependencies {
   const store: FakeCacheStore = {
-    lastAnthropicAttemptAt: null,
-    lastCodexAttemptAt: null,
-    lastCodexLoginAttemptAt: null,
-    lastGoodAnthropicBuckets: null,
-    lastGoodCodexBuckets: null,
+    lastGoodReport: null,
+    lastObservedAt: {},
     firedAlertKeys: new Set<string>(),
-    lastUpdatedAt: null,
     bucketHistory: {},
-    lastCodexResetCreditsAvailable: null,
-    lastAnthropicSkipped: [],
     ...initial,
   };
 
   return {
-    getLastAnthropicAttemptAt: vi.fn((): Date | null => store.lastAnthropicAttemptAt),
-    setLastAnthropicAttemptAt: vi.fn((date: Date): void => {
-      store.lastAnthropicAttemptAt = date;
+    getLastGoodReport: vi.fn((): AiLimitsReport | null => store.lastGoodReport),
+    setLastGoodReport: vi.fn((report: AiLimitsReport): void => {
+      store.lastGoodReport = report;
     }),
-    getLastCodexAttemptAt: vi.fn((): Date | null => store.lastCodexAttemptAt),
-    setLastCodexAttemptAt: vi.fn((date: Date): void => {
-      store.lastCodexAttemptAt = date;
-    }),
-    getLastCodexLoginAttemptAt: vi.fn((): Date | null => store.lastCodexLoginAttemptAt),
-    setLastCodexLoginAttemptAt: vi.fn((date: Date): void => {
-      store.lastCodexLoginAttemptAt = date;
-    }),
-    getLastGoodBuckets: vi.fn((provider: Provider): Bucket[] | null =>
-      provider === "anthropic" ? store.lastGoodAnthropicBuckets : store.lastGoodCodexBuckets,
-    ),
-    setLastGoodBuckets: vi.fn((provider: Provider, buckets: Bucket[]): void => {
-      if (provider === "anthropic") {
-        store.lastGoodAnthropicBuckets = buckets;
-      } else {
-        store.lastGoodCodexBuckets = buckets;
-      }
+    getLastObservedAt: vi.fn((bucketKey: string): Date | null => store.lastObservedAt[bucketKey] ?? null),
+    setLastObservedAt: vi.fn((bucketKey: string, date: Date): void => {
+      store.lastObservedAt[bucketKey] = date;
     }),
     getFiredAlertKeys: vi.fn((): Set<string> => new Set(store.firedAlertKeys)),
     setFiredAlertKeys: vi.fn((keys: Set<string>): void => {
       store.firedAlertKeys = new Set(keys);
     }),
-    getLastUpdatedAt: vi.fn((): Date | null => store.lastUpdatedAt),
-    setLastUpdatedAt: vi.fn((date: Date): void => {
-      store.lastUpdatedAt = date;
-    }),
-    getBucketHistory: vi.fn((bucketId: string): HistoryPoint[] => store.bucketHistory[bucketId] ?? []),
-    setBucketHistory: vi.fn((bucketId: string, history: HistoryPoint[]): void => {
-      store.bucketHistory[bucketId] = history;
-    }),
-    getLastCodexResetCreditsAvailable: vi.fn((): number | null => store.lastCodexResetCreditsAvailable),
-    setLastCodexResetCreditsAvailable: vi.fn((value: number | null): void => {
-      store.lastCodexResetCreditsAvailable = value;
-    }),
-    getLastAnthropicSkipped: vi.fn((): string[] => store.lastAnthropicSkipped),
-    setLastAnthropicSkipped: vi.fn((reasons: string[]): void => {
-      store.lastAnthropicSkipped = reasons;
+    getBucketHistory: vi.fn((bucketKey: string): HistoryPoint[] => store.bucketHistory[bucketKey] ?? []),
+    setBucketHistory: vi.fn((bucketKey: string, history: HistoryPoint[]): void => {
+      store.bucketHistory[bucketKey] = history;
     }),
   };
 }
 
-// Anthropic body whose one limit cannot be parsed (percent shipped as a string).
-const unreadableAnthropicBody = {
-  limits: [{ kind: "session", group: "session", percent: "61", resets_at: "2026-07-28T11:50:00.000Z", scope: null }],
-};
-
-function anthropicBody(kind: string, percent: number) {
+function rawBucket(overrides: Record<string, unknown> = {}) {
   return {
-    limits: [
-      { kind, group: kind === "session" ? "session" : "weekly", percent, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
-    ],
+    id: "anthropic.weekly_all",
+    provider: "anthropic",
+    account: "work",
+    label: "Weekly (all models)",
+    percent: 50,
+    resets_at: "2026-09-20T10:53:00.000Z",
+    window_seconds: 604800,
+    observed_at: "2026-09-16T11:19:00.000Z",
+    elapsed_percent: 70,
+    ...overrides,
   };
 }
 
-const codexAuth = { accessToken: "codex-token", accountId: "acct-1" };
+function rawReport(overrides: Record<string, unknown> = {}) {
+  return {
+    fetched_at: "2026-09-16T11:20:00.000Z",
+    stale: false,
+    accounts: [{ name: "work", label: "w" }],
+    buckets: [rawBucket()],
+    errors: [],
+    skipped: [],
+    reset_credits: null,
+    plans: [],
+    sources: [],
+    ...overrides,
+  };
+}
 
-describe("loadUsageData", () => {
-  it("smoke: everything unreachable resolves without throwing, empty buckets, both stale, no writes, no notification", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
+const NOW = new Date("2026-09-16T11:25:00.000Z");
+
+describe("loadUsageData — success path", () => {
+  it("parses the runner output and persists it as the last-good report", async () => {
     const cache = createFakeCache();
-    const notify = vi.fn(async (): Promise<void> => {});
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport();
 
     const result = await loadUsageData({
-      now: () => now,
+      now: () => NOW,
       cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => {
-        throw new Error("should not be called — both providers fail before reaching fetch");
+      runAiLimits: async () => raw,
+      notify,
+    });
+
+    expect(result.runError).to.equal(null);
+    expect(result.report).to.not.equal(null);
+    expect(result.report?.buckets[0].percent).to.equal(50);
+    expect(cache.setLastGoodReport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("loadUsageData — runner/parser failure", () => {
+  it("with a last-good report present: snapshot carries runError, the old report, no history, no alerts, no reset events", async () => {
+    const lastGood = aiLimitsReport({
+      buckets: [reportBucket({ key: "anthropic:work:anthropic.weekly_all", id: "anthropic.weekly_all", percent: 40 })],
+    });
+    const cache = createFakeCache({ lastGoodReport: lastGood });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+
+    const result = await loadUsageData({
+      now: () => NOW,
+      cache,
+      runAiLimits: async () => {
+        throw new Error("ai-limits exited with code 1");
       },
       notify,
     });
 
-    expect(result).to.deep.equal({
-      anthropicBuckets: [],
-      codexBuckets: [],
-      anthropicSkipped: [],
-      codexHint: "Codex-Login nicht gefunden",
-      codexResetCreditsAvailable: null,
-      lastUpdatedAt: now,
-      anthropicStale: true,
-      codexStale: true,
-    });
-    expect(notify).not.toHaveBeenCalled();
-    expect(cache.setLastGoodBuckets).not.toHaveBeenCalled();
-  });
-
-  it("smoke: anthropic unreachable but codex fine — codex buckets present, only anthropic stale", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache();
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, codexFixture),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(result.anthropicBuckets).to.deep.equal([]);
-    expect(result.codexBuckets).to.deep.equal(parseCodexUsage(codexFixture));
-    expect(result.anthropicStale).to.equal(true);
-    expect(result.codexStale).to.equal(false);
-    expect(result.codexResetCreditsAvailable).to.equal(null);
-  });
-
-  it("feature: appends a history point per bucket on every successful load", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache();
-
-    await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, codexFixture),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(cache.setBucketHistory).toHaveBeenCalledWith("openai:primary", [{ at: now, percent: 100 }]);
-  });
-
-  it("feature: history accumulates across repeated successful loads instead of being overwritten with a single point", async () => {
-    const cache = createFakeCache();
-    const deps = {
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, codexFixture),
-      notify: vi.fn(async (): Promise<void> => {}),
-    };
-
-    const firstNow = new Date("2026-07-21T09:00:00.000Z");
-    await loadUsageData({ ...deps, now: () => firstNow });
-
-    const secondNow = new Date("2026-07-21T09:35:00.000Z");
-    await loadUsageData({ ...deps, now: () => secondNow });
-
-    expect(cache.setBucketHistory).toHaveBeenLastCalledWith("openai:primary", [
-      { at: firstNow, percent: 100 },
-      { at: secondNow, percent: 100 },
-    ]);
-  });
-
-  it("does not append history when the codex load fails (last-good fallback, no fresh data)", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache();
-
-    await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => {
-        throw new Error("should not be called — both providers fail before reaching fetch");
-      },
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
+    expect(result.report).to.deep.equal(lastGood);
+    expect(result.runError).to.equal("ai-limits exited with code 1");
     expect(cache.setBucketHistory).not.toHaveBeenCalled();
+    expect(cache.setFiredAlertKeys).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("feature: exposes codexResetCreditsAvailable from a fresh codex response", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
+  it("with no last-good report: snapshot report is null, runError set", async () => {
     const cache = createFakeCache();
-    const bodyWithResetCredits = { ...codexFixture, rate_limit_reset_credits: { available_count: 2 } };
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
 
     const result = await loadUsageData({
-      now: () => now,
+      now: () => NOW,
       cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
+      runAiLimits: async () => {
+        throw new Error("ai-limits-nonexistent-binary-xyz: no such file or directory");
       },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, bodyWithResetCredits),
-      notify: vi.fn(async (): Promise<void> => {}),
+      notify,
     });
 
-    expect(result.codexResetCreditsAvailable).to.equal(2);
+    expect(result.report).to.equal(null);
+    expect(result.runError).to.equal("ai-limits-nonexistent-binary-xyz: no such file or directory");
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("feature: a fresh successful codex fetch overwrites the previously cached reset-credits value", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache({ lastCodexResetCreditsAvailable: 5 });
-    const bodyWithResetCredits = { ...codexFixture, rate_limit_reset_credits: { available_count: 2 } };
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, bodyWithResetCredits),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(result.codexResetCreditsAvailable).to.equal(2);
-    expect(cache.setLastCodexResetCreditsAvailable).toHaveBeenCalledWith(2);
-  });
-
-  it("cooldown-skip: within the codex cooldown, returns the previously cached reset-credits value instead of null", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache({ lastCodexAttemptAt: now, lastCodexResetCreditsAvailable: 3 });
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => {
-        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
-      },
-      fetchImplementation: async () => {
-        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
-      },
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(result.codexResetCreditsAvailable).to.equal(3);
-    expect(cache.setLastCodexResetCreditsAvailable).not.toHaveBeenCalled();
-  });
-
-  it("failure: a failed codex fetch keeps the previously cached reset-credits value, without persisting a new one", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache({ lastCodexResetCreditsAvailable: 4 });
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, { limits: [] }),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(result.codexResetCreditsAvailable).to.equal(4);
-    expect(cache.setLastCodexResetCreditsAvailable).not.toHaveBeenCalled();
-  });
-
-  it("cooldown-skip: within the anthropic cooldown, skips readToken, passes through last-good, does not re-persist the attempt timestamp", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const lastGoodAnthropicBuckets: Bucket[] = [bucket({ percent: 11 })];
-    const cache = createFakeCache({ lastAnthropicAttemptAt: now, lastGoodAnthropicBuckets });
-    const readToken = vi.fn(async () => "token");
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken,
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, codexFixture),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(readToken).not.toHaveBeenCalled();
-    expect(result.anthropicBuckets).to.deep.equal(lastGoodAnthropicBuckets);
-    expect(cache.setLastAnthropicAttemptAt).not.toHaveBeenCalled();
-  });
-
-  it("cooldown-skip: within the codex cooldown, skips readAuth, passes through last-good, does not re-persist the attempt timestamp", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const lastGoodCodexBuckets: Bucket[] = [
-      bucket({ id: "openai:primary", provider: "openai", label: "OpenAI", percent: 42, windowSeconds: 604800 }),
-    ];
-    const cache = createFakeCache({ lastCodexAttemptAt: now, lastGoodCodexBuckets });
-    const readAuth = vi.fn(async () => codexAuth);
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called — cooldown skip returns before any auth/fetch");
-      },
-      // Only Anthropic actually fetches in this test (Codex is cooldown-skipped) — an empty
-      // limits[] is a valid, minimal Anthropic response (see anthropic.test.ts boundary case).
-      fetchImplementation: async () => jsonResponse(200, { limits: [] }),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(readAuth).not.toHaveBeenCalled();
-    expect(result.codexBuckets).to.deep.equal(lastGoodCodexBuckets);
-    expect(cache.setLastCodexAttemptAt).not.toHaveBeenCalled();
-  });
-
-  it("regression: two concurrent loads produce a single anthropic fetch and a single history point", async () => {
-    // The gate used to check lastAttemptAt and write it only after the fetch resolved. Two renders
-    // of the same menu-bar command start milliseconds apart, so both read the stale timestamp, both
-    // passed the gate and both hit an endpoint that allows ~1 req/min — visible in the live cache as
-    // history points in pairs ~5ms apart.
-    const now = new Date("2026-07-21T09:00:00.000Z");
+  it("a parser rejection (valid JSON, invalid shape) is treated the same as a runner rejection", async () => {
     const cache = createFakeCache();
-    let anthropicFetches = 0;
-    const deps = {
-      now: () => now,
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+
+    const result = await loadUsageData({
+      now: () => NOW,
       cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => {
-        anthropicFetches += 1;
-        return jsonResponse(200, {
-          limits: [
-            { kind: "weekly_all", group: "weekly", percent: 5, resets_at: "2026-07-27T19:59:59.982Z", scope: null },
-          ],
-        });
-      },
-      notify: vi.fn(async (): Promise<void> => {}),
-    };
+      runAiLimits: async () => ({ not: "a valid report" }),
+      notify,
+    });
 
-    await Promise.all([loadUsageData(deps), loadUsageData(deps)]);
+    expect(result.report).to.equal(null);
+    expect(typeof result.runError).to.equal("string");
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
 
-    expect(anthropicFetches).to.equal(1);
-    expect(cache.setBucketHistory).toHaveBeenCalledWith("anthropic:weekly_all", [{ at: now, percent: 5 }]);
+describe("loadUsageData — history", () => {
+  it("records exactly one history point across two loads that return the identical report", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport();
+    const deps = { now: () => NOW, cache, runAiLimits: async () => raw, notify };
+
+    await loadUsageData(deps);
+    await loadUsageData(deps);
+
+    const history = cache.getBucketHistory("anthropic:work:anthropic.weekly_all");
+    expect(history.length).to.equal(1);
   });
 
-  it("feature: force bypasses the cooldown gate so a manual refresh actually re-fetches", async () => {
-    // Opening the menu already runs a load and writes both attempt timestamps, so the refresh
-    // action always lands inside the 60s window — without force it is a guaranteed no-op.
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache({ lastAnthropicAttemptAt: now });
-    const readToken = vi.fn(async () => "token");
+  it("records a second history point when observed_at advances between loads", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const first = rawReport();
+    const second = rawReport({
+      buckets: [rawBucket({ percent: 60, observed_at: "2026-09-16T11:24:00.000Z" })],
+    });
 
-    const result = await loadUsageData(
-      {
-        now: () => now,
-        cache,
-        readToken,
-        readAuth: async () => {
-          throw new Error("Codex-Auth-Datei nicht lesbar");
-        },
-        runLoginStatus: async () => {
-          throw new Error("should not be called — readAuth already failed");
-        },
-        fetchImplementation: async () =>
-          jsonResponse(200, {
-            limits: [
-              { kind: "weekly_all", group: "weekly", percent: 7, resets_at: "2026-07-27T19:59:59.982Z", scope: null },
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => first, notify });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => second, notify });
+
+    const history = cache.getBucketHistory("anthropic:work:anthropic.weekly_all");
+    expect(history.length).to.equal(2);
+    expect(history[1].percent).to.equal(60);
+  });
+});
+
+describe("loadUsageData — alert dedup per account", () => {
+  it("fires the same bucket id's alert separately for two different accounts", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({
+      accounts: [
+        { name: "work", label: "w" },
+        { name: "private", label: "p" },
+      ],
+      buckets: [rawBucket({ account: "work", percent: 85 }), rawBucket({ account: "private", percent: 85 })],
+    });
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).toHaveBeenCalledTimes(2);
+    const messages = notify.mock.calls.map((call) => call[1] as string);
+    expect(messages.some((message) => message.startsWith("work · Weekly (all models)"))).to.equal(true);
+    expect(messages.some((message) => message.startsWith("private · Weekly (all models)"))).to.equal(true);
+  });
+
+  it("does not refire an already-fired alert on a second load at the same percent", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ buckets: [rawBucket({ percent: 85 })] });
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("loadUsageData — reset events per account", () => {
+  it("fires a reset event only for the account whose percent dropped", async () => {
+    const cache = createFakeCache({
+      lastGoodReport: aiLimitsReport({
+        accounts: [reportAccount({ name: "work", label: "w" }), reportAccount({ name: "private", label: "p" })],
+        buckets: [
+          reportBucket({
+            key: "anthropic:work:anthropic.weekly_all",
+            id: "anthropic.weekly_all",
+            account: "work",
+            percent: 90,
+          }),
+          reportBucket({
+            key: "anthropic:private:anthropic.weekly_all",
+            id: "anthropic.weekly_all",
+            account: "private",
+            percent: 20,
+          }),
+        ],
+      }),
+    });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({
+      accounts: [
+        { name: "work", label: "w" },
+        { name: "private", label: "p" },
+      ],
+      buckets: [rawBucket({ account: "work", percent: 5 }), rawBucket({ account: "private", percent: 22 })],
+    });
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const message = notify.mock.calls[0][1] as string;
+    expect(message.startsWith("work · Weekly (all models)")).to.equal(true);
+  });
+
+  it("re-reads the reset baseline AFTER the runner await, seeing a concurrent load's fresher write", async () => {
+    const cache = createFakeCache({
+      lastGoodReport: aiLimitsReport({
+        buckets: [
+          reportBucket({
+            key: "anthropic:work:anthropic.weekly_all",
+            id: "anthropic.weekly_all",
+            account: "work",
+            percent: 12,
+          }),
+        ],
+      }),
+    });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ buckets: [rawBucket({ percent: 5 })] });
+
+    const result = await loadUsageData({
+      now: () => NOW,
+      cache,
+      runAiLimits: async () => {
+        // Simulates a second, concurrent loadUsageData call finishing first and writing a fresher
+        // last-good report while this call's own fetch is still in flight.
+        cache.setLastGoodReport(
+          aiLimitsReport({
+            buckets: [
+              reportBucket({
+                key: "anthropic:work:anthropic.weekly_all",
+                id: "anthropic.weekly_all",
+                account: "work",
+                percent: 90,
+              }),
             ],
           }),
-        notify: vi.fn(async (): Promise<void> => {}),
+        );
+        return raw;
       },
-      { force: true },
-    );
+      notify,
+    });
 
-    expect(readToken).toHaveBeenCalledTimes(1);
-    expect(result.anthropicBuckets.map((b) => b.percent)).to.deep.equal([7]);
+    expect(result.runError).to.equal(null);
+    // Baseline 12 -> 5 would not cross a reset-drop threshold; baseline 90 -> 5 does. Firing here
+    // proves the baseline read happened after the concurrent write, not before this call's own await.
+    expect(notify).toHaveBeenCalledTimes(1);
+    const message = notify.mock.calls[0][1] as string;
+    expect(message.startsWith("work · Weekly (all models)")).to.equal(true);
   });
+});
 
-  it("feature: a weekly_scoped limit reported without resets_at survives the whole pipeline", async () => {
-    // The live failure: Anthropic reports resets_at:null on the per-model weekly limit once it is
-    // unused, which used to throw and discard every Anthropic bucket, freezing the menu bar on
-    // last-good data until that model was used again.
-    const now = new Date("2026-07-28T07:00:00.000Z");
+describe("loadUsageData — freshness gate", () => {
+  it("ignores a bucket reported at an older observedAt than the baseline for alerts, pruning, and resets", async () => {
     const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
 
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () =>
-        jsonResponse(200, {
-          limits: [
-            { kind: "session", group: "session", percent: 2, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
-            { kind: "weekly_all", group: "weekly", percent: 0, resets_at: "2026-08-03T20:00:00.000Z", scope: null },
-            {
-              kind: "weekly_scoped",
-              group: "weekly",
-              percent: 0,
-              resets_at: null,
-              scope: { model: { id: null, display_name: "Fable" }, surface: null },
-            },
-          ],
-        }),
-      notify: vi.fn(async (): Promise<void> => {}),
+    const run1 = rawReport({
+      buckets: [rawBucket({ percent: 85, observed_at: "2026-09-16T12:20:00.000Z" })],
     });
-
-    expect(result.anthropicStale).to.equal(false);
-    expect(result.anthropicSkipped).to.deep.equal([]);
-    expect(result.anthropicBuckets.map((b) => b.id)).to.deep.equal([
-      "anthropic:session",
-      "anthropic:weekly_all",
-      "anthropic:weekly_scoped:fable",
-    ]);
-    expect(result.anthropicBuckets[2].resetsAt.toISOString()).to.equal("2026-08-03T20:00:00.000Z");
-  });
-
-  it("failure: an unreadable response keeps last-good intact and reports the data as stale", async () => {
-    // Per-limit isolation must not turn "the API sent something we cannot read" into "we have no
-    // data and everything is fine" — that silently destroys the cache and drops the veraltet marker.
-    const now = new Date("2026-07-28T11:00:00.000Z");
-    const lastGoodAnthropicBuckets: Bucket[] = [bucket({ id: "anthropic:session", percent: 61 })];
-    const cache = createFakeCache({ lastGoodAnthropicBuckets });
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, unreadableAnthropicBody),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    expect(result.anthropicBuckets.map((b) => b.percent)).to.deep.equal([61]);
-    expect(result.anthropicStale).to.equal(true);
-    expect(result.anthropicSkipped).to.have.length(1);
-    expect(cache.setLastGoodBuckets).not.toHaveBeenCalledWith("anthropic", []);
-  });
-
-  it("failure: a partially unreadable response carries the last-good value for the failed limit only", async () => {
-    const now = new Date("2026-07-28T11:00:00.000Z");
-    const lastGoodAnthropicBuckets: Bucket[] = [
-      bucket({ id: "anthropic:session", percent: 61 }),
-      bucket({ id: "anthropic:weekly_all", percent: 44 }),
-    ];
-    const cache = createFakeCache({ lastGoodAnthropicBuckets });
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () =>
-        jsonResponse(200, {
-          limits: [
-            { kind: "session", group: "session", percent: 5, resets_at: "2026-07-28T11:50:00.000Z", scope: null },
-            { kind: "weekly_all", group: "weekly", percent: "44", resets_at: "2026-08-03T20:00:00.000Z", scope: null },
-          ],
-        }),
-      notify: vi.fn(async (): Promise<void> => {}),
-    });
-
-    const byId = new Map(result.anthropicBuckets.map((b) => [b.id, b.percent]));
-    expect(byId.get("anthropic:session")).to.equal(5); // fresh
-    expect(byId.get("anthropic:weekly_all")).to.equal(44); // carried over
-    expect(result.anthropicStale).to.equal(true);
-    // Only the freshly observed bucket gets a history point — a carried-over value is not a new
-    // measurement and would flatten the burn-rate slope.
-    expect(cache.setBucketHistory).toHaveBeenCalledWith("anthropic:session", [{ at: now, percent: 5 }]);
-    expect(cache.setBucketHistory).not.toHaveBeenCalledWith("anthropic:weekly_all", [{ at: now, percent: 44 }]);
-  });
-
-  it("invariant: a one-tick parse failure does not re-arm alerts that already fired", async () => {
-    const cache = createFakeCache();
-    const notify = vi.fn(async (): Promise<void> => {});
-    const baseDeps = {
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      notify,
-    };
-
-    await loadUsageData({
-      ...baseDeps,
-      now: () => new Date("2026-07-28T11:00:00.000Z"),
-      fetchImplementation: async () => jsonResponse(200, anthropicBody("session", 96)),
-    });
-    expect(notify).toHaveBeenCalledTimes(2); // 80 and 95
-
-    // Degraded tick: the limit vanishes from the fresh parse.
-    notify.mockClear();
-    await loadUsageData({
-      ...baseDeps,
-      now: () => new Date("2026-07-28T11:02:00.000Z"),
-      fetchImplementation: async () => jsonResponse(200, unreadableAnthropicBody),
-    });
-    expect(notify).not.toHaveBeenCalled();
-
-    // Recovered tick at the same 96% — the alerts must still be suppressed.
-    await loadUsageData({
-      ...baseDeps,
-      now: () => new Date("2026-07-28T11:04:00.000Z"),
-      fetchImplementation: async () => jsonResponse(200, anthropicBody("session", 96)),
-    });
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it("feature: the skipped-limit reasons survive a cooldown-skipped render", async () => {
-    const cache = createFakeCache();
-    const baseDeps = {
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, unreadableAnthropicBody),
-      notify: vi.fn(async (): Promise<void> => {}),
-    };
-
-    const fetched = await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-28T11:00:00.000Z") });
-    expect(fetched.anthropicSkipped).to.have.length(1);
-
-    // Menu reopened 20s later — inside the 60s gate, so no fetch and no fresh parse.
-    const skipped = await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-28T11:00:20.000Z") });
-    expect(skipped.anthropicSkipped).to.deep.equal(fetched.anthropicSkipped);
-  });
-
-  it("regression: a forced refresh racing an in-flight load reports the reset only once", async () => {
-    // force bypasses the gate that otherwise collapses concurrent loads, so both calls would
-    // otherwise diff against the same pre-fetch baseline and both announce the same reset.
-    const now = new Date("2026-07-28T11:00:00.000Z");
-    const cache = createFakeCache({
-      lastGoodAnthropicBuckets: [bucket({ id: "anthropic:session", percent: 90 })],
-    });
-    const notify = vi.fn(async (title: string, message: string): Promise<void> => {
-      void title;
-      void message;
-    });
-    const deps = {
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, anthropicBody("session", 2)),
-      notify,
-    };
-
-    await Promise.all([loadUsageData(deps), loadUsageData(deps, { force: true })]);
-
-    const resetCalls = notify.mock.calls.filter(([, message]) => message.includes("resettet"));
-    expect(resetCalls).to.have.length(1);
-  });
-
-  it("invariant: a bucket at 100% fires the 80 and 95 alerts exactly once; a repeat call with the same state fires nothing", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const cache = createFakeCache();
-    const notify = vi.fn(async (): Promise<void> => {});
-    const deps = {
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, codexFixture),
-      notify,
-    };
-
-    await loadUsageData(deps);
-
-    expect(notify).toHaveBeenCalledTimes(2);
-
-    notify.mockClear();
-    await loadUsageData(deps);
-
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it("regression: a bucket held at 99% while its resets_at drifts stays silent after the first alert", async () => {
-    // The rolling-window bug: Anthropic recomputes resets_at = now + window on each request, so a dedup
-    // key that embeds resets_at changes every fetch and both the alert AND the reset notification
-    // re-fire forever. This guard holds Fable at a constant 99% but drifts resets_at between two genuine
-    // fetches (>60s apart, past the anthropic cooldown gate). The second fetch's zero-notification
-    // assertion covers both dedup paths at once: no re-fired 80/95 alert and no spurious reset message.
-    const cache = createFakeCache();
-    const notify = vi.fn(async (): Promise<void> => {});
-    const fableBody = (resetsAtIso: string) => ({
-      limits: [
-        {
-          kind: "weekly_scoped",
-          group: "weekly",
-          percent: 99,
-          resets_at: resetsAtIso,
-          scope: { model: { id: "fable", display_name: "Fable" } },
-        },
-      ],
-    });
-    const baseDeps = {
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      notify,
-    };
-
-    // First fetch: Fable at 99% fires the 80 and 95 alerts once each.
-    await loadUsageData({
-      ...baseDeps,
-      now: () => new Date("2026-07-21T09:00:00.000Z"),
-      fetchImplementation: async () => jsonResponse(200, fableBody("2026-07-28T09:00:00.000Z")),
-    });
-    expect(notify).toHaveBeenCalledTimes(2);
-
-    // Second fetch >60s later (past the cooldown gate, so it genuinely re-fetches) with a drifted
-    // resets_at — the exact rolling-window signature that used to bust the dedup key.
-    notify.mockClear();
-    await loadUsageData({
-      ...baseDeps,
-      now: () => new Date("2026-07-21T09:01:01.000Z"),
-      fetchImplementation: async () => jsonResponse(200, fableBody("2026-07-28T09:01:01.000Z")),
-    });
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it("feature: fires a reset notification when a bucket that was >=80 percent gets a new reset window", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
-    const staleResetsAt = new Date("2026-07-14T19:59:59.982Z");
-    const freshResetsAt = new Date("2026-07-27T19:59:59.982Z");
-    const previousBucket = bucket({
-      id: "anthropic:weekly_all",
-      label: "Woche",
-      percent: 85,
-      resetsAt: staleResetsAt,
-      windowSeconds: 604800,
-    });
-    const cache = createFakeCache({ lastGoodAnthropicBuckets: [previousBucket] });
-    const notify = vi.fn(async (): Promise<void> => {});
-    const freshAnthropicBody = {
-      limits: [
-        { kind: "weekly_all", group: "weekly", percent: 5, resets_at: freshResetsAt.toISOString(), scope: null },
-      ],
-    };
-
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, freshAnthropicBody),
-      notify,
-    });
-
-    expect(notify).toHaveBeenCalledWith("AI Limits", "Woche-Limit resettet — wieder verfügbar");
-    expect(result.anthropicBuckets[0].resetsAt).to.deep.equal(freshResetsAt);
-  });
-
-  it("invariant: a reset notification fires once, and the next genuine re-fetch of the same state stays silent", async () => {
-    // The second load runs 61s later, past the cooldown gate, so it actually re-fetches and
-    // re-diffs. With the same `now` it would be a cooldown skip and this would assert nothing —
-    // the gate, not the invariant, would be carrying the test.
-    const staleResetsAt = new Date("2026-07-14T19:59:59.982Z");
-    const freshResetsAt = new Date("2026-07-27T19:59:59.982Z");
-    const previousBucket = bucket({
-      id: "anthropic:weekly_all",
-      label: "Woche",
-      percent: 85,
-      resetsAt: staleResetsAt,
-      windowSeconds: 604800,
-    });
-    const cache = createFakeCache({ lastGoodAnthropicBuckets: [previousBucket] });
-    const notify = vi.fn(async (): Promise<void> => {});
-    const freshAnthropicBody = {
-      limits: [
-        { kind: "weekly_all", group: "weekly", percent: 5, resets_at: freshResetsAt.toISOString(), scope: null },
-      ],
-    };
-    const baseDeps = {
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, freshAnthropicBody),
-      notify,
-    };
-
-    await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-21T09:00:00.000Z") });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run1, notify });
     expect(notify).toHaveBeenCalledTimes(1);
 
-    notify.mockClear();
-    await loadUsageData({ ...baseDeps, now: () => new Date("2026-07-21T09:01:01.000Z") });
-    expect(notify).not.toHaveBeenCalled();
+    const run2 = rawReport({
+      buckets: [rawBucket({ percent: 70, observed_at: "2026-09-16T12:05:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls.some((call) => (call[1] as string).includes("resettet"))).to.equal(false);
+
+    const run3 = rawReport({
+      buckets: [rawBucket({ percent: 86, observed_at: "2026-09-16T12:25:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run3, notify });
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fire a reset notification on the very first load (no previous snapshot to compare against)", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
+  it("sends nothing and leaves fired keys unchanged when the identical report is served twice", async () => {
     const cache = createFakeCache();
-    const notify = vi.fn(async (): Promise<void> => {});
-    const freshAnthropicBody = {
-      limits: [
-        { kind: "weekly_all", group: "weekly", percent: 85, resets_at: "2026-07-27T19:59:59.982Z", scope: null },
-      ],
-    };
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ buckets: [rawBucket({ percent: 85 })] });
 
-    await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => "token",
-      readAuth: async () => {
-        throw new Error("Codex-Auth-Datei nicht lesbar");
-      },
-      runLoginStatus: async () => {
-        throw new Error("should not be called — readAuth already failed");
-      },
-      fetchImplementation: async () => jsonResponse(200, freshAnthropicBody),
-      notify,
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+    const firedAfterFirst = cache.getFiredAlertKeys();
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(cache.getFiredAlertKeys()).to.deep.equal(firedAfterFirst);
+  });
+});
+
+describe("loadUsageData — fired keys survive an absent or stale bucket", () => {
+  it("does not re-fire once a fresh observation returns after the bucket was absent from a skipped run", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+
+    const run1 = rawReport({
+      buckets: [rawBucket({ id: "anthropic.weekly.fable", percent: 96, observed_at: "2026-09-16T12:20:00.000Z" })],
     });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run1, notify });
+    expect(notify).toHaveBeenCalledTimes(1);
 
-    expect(notify).not.toHaveBeenCalledWith("AI Limits", "Woche-Limit resettet — wieder verfügbar");
+    const run2 = rawReport({
+      buckets: [],
+      skipped: [{ provider: "anthropic", account: "work", reason: "Fable-Limit nicht lesbar" }],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    const run3 = rawReport({
+      buckets: [rawBucket({ id: "anthropic.weekly.fable", percent: 96, observed_at: "2026-09-16T12:30:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run3, notify });
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it("failure: a rejecting notify does not abort the load — buckets and last-good writes still land", async () => {
-    const now = new Date("2026-07-21T09:00:00.000Z");
+  it("fires again on a later fresh crossing after a fresh observation dropped below threshold minus hysteresis", async () => {
     const cache = createFakeCache();
-    const notify = vi.fn(async (): Promise<void> => {
-      throw new Error("osascript: not permitted");
-    });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
 
-    const result = await loadUsageData({
-      now: () => now,
-      cache,
-      readToken: async () => {
-        throw new Error("Anthropic-Token nicht im Keychain gefunden");
-      },
-      readAuth: async () => codexAuth,
-      runLoginStatus: async () => {
-        throw new Error("should not be called on a clean codex success");
-      },
-      fetchImplementation: async () => jsonResponse(200, codexFixture),
-      notify,
+    const run1 = rawReport({
+      buckets: [rawBucket({ id: "anthropic.weekly.fable", percent: 96, observed_at: "2026-09-16T12:20:00.000Z" })],
     });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run1, notify });
+    expect(notify).toHaveBeenCalledTimes(1);
 
+    const run2 = rawReport({
+      buckets: [rawBucket({ id: "anthropic.weekly.fable", percent: 70, observed_at: "2026-09-16T12:25:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
     expect(notify).toHaveBeenCalledTimes(2);
-    expect(result.codexBuckets).to.deep.equal(parseCodexUsage(codexFixture));
-    expect(cache.setLastGoodBuckets).toHaveBeenCalledWith("openai", parseCodexUsage(codexFixture));
+    expect(notify.mock.calls[1][1]).to.match(/-Limit resettet/);
+
+    const run3 = rawReport({
+      buckets: [rawBucket({ id: "anthropic.weekly.fable", percent: 96, observed_at: "2026-09-16T12:30:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run3, notify });
+    expect(notify).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("loadUsageData — one notification per bucket across simultaneous thresholds", () => {
+  it("sends exactly one notification when a bucket is first observed at 100%, marking both the 80 and 95 keys fired", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ buckets: [rawBucket({ percent: 100 })] });
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(cache.getFiredAlertKeys()).to.deep.equal(
+      new Set(["anthropic:work:anthropic.weekly_all:80", "anthropic:work:anthropic.weekly_all:95"]),
+    );
+  });
+});
+
+describe("loadUsageData — concurrent overlapping loads", () => {
+  it("persists fired keys before awaiting notify, so an overlapping second load does not re-notify", async () => {
+    const cache = createFakeCache();
+    let releaseNotify: (() => void) | undefined;
+    const notifyGate = new Promise<void>((resolve) => {
+      releaseNotify = resolve;
+    });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {
+      await notifyGate;
+    });
+    const raw = rawReport({ buckets: [rawBucket({ percent: 85 })] });
+    const deps = { now: () => NOW, cache, runAiLimits: async () => raw, notify };
+
+    const loads = Promise.all([loadUsageData(deps), loadUsageData(deps)]);
+    // Both calls' synchronous work up to (and including) the notify call has run by now; neither
+    // has resumed past its notify await because notifyGate is still pending.
+    releaseNotify?.();
+    await loads;
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("loadUsageData — notification delivery", () => {
+  it("a rejected notification does not reject loadUsageData and other data is still persisted", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {
+      throw new Error("osascript failed");
+    });
+    const raw = rawReport({ buckets: [rawBucket({ percent: 85 })] });
+
+    const result = await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(result.runError).to.equal(null);
+    expect(cache.setLastGoodReport).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefixes an anthropic notification with '<account> · <label>'", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({
+      accounts: [{ name: "work", label: "w" }],
+      buckets: [rawBucket({ account: "work", label: "Weekly (all models)", percent: 96 })],
+    });
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify.mock.calls[0][1]).to.match(/^work · Weekly \(all models\)/);
+  });
+
+  it("prefixes a codex notification with 'Codex · <label>'", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({
+      accounts: [],
+      buckets: [
+        rawBucket({
+          id: "codex.primary",
+          provider: "codex",
+          account: "default",
+          label: "Primary (7d)",
+          percent: 96,
+        }),
+      ],
+    });
+
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify.mock.calls[0][1]).to.match(/^Codex · Primary \(7d\)/);
   });
 });
