@@ -430,6 +430,46 @@ describe("loadUsageData — concurrent overlapping loads", () => {
   });
 });
 
+describe("loadUsageData — stale cache served after a 429 backoff", () => {
+  it("does not re-baseline on an older reading and does not double-fire the reset", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+
+    const run1 = rawReport({
+      buckets: [rawBucket({ percent: 92, observed_at: "2026-09-16T12:00:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run1, notify });
+    const countAfterRun1 = notify.mock.calls.length;
+
+    const run2 = rawReport({
+      buckets: [rawBucket({ percent: 3, observed_at: "2026-09-16T12:20:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
+    expect(notify.mock.calls.length).to.equal(countAfterRun1 + 1);
+    expect(notify.mock.calls[notify.mock.calls.length - 1][1] as string).to.match(/resettet/);
+
+    // ai-limits fell back to a pre-reset cache entry after a 429 backoff: 92% observed at 12:00,
+    // older than the 3% already persisted from run2 (observed 12:20).
+    const run3 = rawReport({
+      buckets: [rawBucket({ percent: 92, observed_at: "2026-09-16T12:00:00.000Z" })],
+    });
+    const result3 = await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run3, notify });
+    expect(notify.mock.calls.length).to.equal(countAfterRun1 + 1);
+    expect(result3.report?.buckets[0].percent).to.equal(3);
+    expect(result3.report?.buckets[0].observedAt).to.deep.equal(new Date("2026-09-16T12:20:00.000Z"));
+
+    const persisted = cache.getLastGoodReport();
+    expect(persisted?.buckets[0].percent).to.equal(3);
+    expect(persisted?.buckets[0].observedAt).to.deep.equal(new Date("2026-09-16T12:20:00.000Z"));
+
+    const run4 = rawReport({
+      buckets: [rawBucket({ percent: 5, observed_at: "2026-09-16T12:30:00.000Z" })],
+    });
+    await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run4, notify });
+    expect(notify.mock.calls.length).to.equal(countAfterRun1 + 1);
+  });
+});
+
 describe("loadUsageData — notification delivery", () => {
   it("a rejected notification does not reject loadUsageData and other data is still persisted", async () => {
     const cache = createFakeCache();

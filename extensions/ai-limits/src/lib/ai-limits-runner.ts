@@ -71,20 +71,38 @@ export async function runAiLimits(options: Partial<AiLimitsRunnerOptions> = {}):
       }
       settled = true;
       clearTimeout(timer);
-      if (code !== 0) {
-        const excerpt = stderr.trim().slice(0, STDERR_EXCERPT_LENGTH);
-        reject(new Error(`ai-limits: Exit-Code ${code} (${merged.command}): ${excerpt}`));
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(stdout));
+        } catch (error) {
+          reject(
+            new Error(
+              `ai-limits: stdout ist kein valides JSON: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+        }
         return;
       }
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (error) {
-        reject(
-          new Error(
-            `ai-limits: stdout ist kein valides JSON: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        );
+      // ai-limits' exit-code contract: 1 = no (provider, account) pair returned data, but the full
+      // report (with per-account errors[]) still went to stdout; 2 = usage/registry error, message on
+      // stderr only. Exit 1 with parseable stdout therefore resolves like exit 0, so the dropdown can
+      // show the per-account error rows instead of a bare "Exit-Code 1".
+      if (code === 1) {
+        try {
+          resolve(JSON.parse(stdout));
+        } catch (error) {
+          const excerpt = stderr.trim().slice(0, STDERR_EXCERPT_LENGTH);
+          const reason = error instanceof Error ? error.message : String(error);
+          reject(
+            new Error(
+              `ai-limits: Exit-Code 1 (${merged.command}), stdout ist kein valides JSON (${reason}): ${excerpt}`,
+            ),
+          );
+        }
+        return;
       }
+      const excerpt = stderr.trim().slice(0, STDERR_EXCERPT_LENGTH);
+      reject(new Error(`ai-limits: Exit-Code ${code} (${merged.command}): ${excerpt}`));
     });
   });
 }

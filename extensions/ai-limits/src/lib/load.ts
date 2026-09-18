@@ -51,18 +51,24 @@ function toNotificationBucket(bucket: ReportBucket): AlertBucket {
   };
 }
 
-// Alerts, key-pruning and reset detection must never react to a bucket reported at an observedAt
-// OLDER than the same-key bucket in the baseline report: after a 429 backoff ai-limits can fall
-// back from a newer statusline snapshot to an older cache entry, and treating that older reading as
-// new would announce a false reset and re-arm alerts. An equal observedAt is the same measurement
-// served again, which the alert and reset logic already handles idempotently. A bucket with no
-// baseline counterpart (first sighting, or back after being absent) counts as fresh.
-function isFreshBucket(bucket: ReportBucket, baselineBuckets: ReportBucket[]): boolean {
-  const baselineBucket = baselineBuckets.find((entry) => entry.key === bucket.key);
-  if (baselineBucket === undefined) {
-    return true;
+// After a 429 backoff, `bin/ai-limits` can fall back from a newer statusline snapshot to an older
+// cache entry (a pre-reset bucket served again). Merging the incoming report against the baseline
+// right after parsing — per bucket key, keep whichever of the two has the strictly newer
+// observedAt — keeps that stale reading out of the displayed report, the persisted baseline, and
+// every downstream alert/reset/history/pruning decision, all of which read the merged result. A
+// bucket present only in the baseline (absent from this run) is not resurrected.
+function mergeWithBaseline(report: AiLimitsReport, baselineReport: AiLimitsReport | null): AiLimitsReport {
+  if (baselineReport === null) {
+    return report;
   }
-  return bucket.observedAt.getTime() >= baselineBucket.observedAt.getTime();
+  const buckets = report.buckets.map((bucket) => {
+    const baselineBucket = baselineReport.buckets.find((entry) => entry.key === bucket.key);
+    if (baselineBucket !== undefined && baselineBucket.observedAt.getTime() > bucket.observedAt.getTime()) {
+      return baselineBucket;
+    }
+    return bucket;
+  });
+  return { ...report, buckets };
 }
 
 // A history point is recorded only for a bucket whose observedAt genuinely advanced since the last
@@ -103,25 +109,24 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   // fetch is still in flight, and reading the baseline only now means the diff below sees that
   // write instead of a pre-fetch snapshot both concurrent calls would otherwise share.
   const baselineReport = deps.cache.getLastGoodReport();
-  deps.cache.setLastGoodReport(report);
+  const effectiveReport = mergeWithBaseline(report, baselineReport);
+  deps.cache.setLastGoodReport(effectiveReport);
 
-  recordHistoryIfAdvanced(deps.cache, report.buckets, now);
+  recordHistoryIfAdvanced(deps.cache, effectiveReport.buckets, now);
 
   const baselineReportBuckets = baselineReport === null ? [] : baselineReport.buckets;
-  const freshBuckets = report.buckets
-    .filter((bucket) => isFreshBucket(bucket, baselineReportBuckets))
-    .map(toNotificationBucket);
+  const notificationBuckets = effectiveReport.buckets.map(toNotificationBucket);
   const baselineBuckets = baselineReportBuckets.map(toNotificationBucket);
 
   const firedBefore = deps.cache.getFiredAlertKeys();
-  const prunedFired = pruneFiredKeys(firedBefore, freshBuckets);
-  const alertsToFire = determineAlertsToFire(freshBuckets, prunedFired);
+  const prunedFired = pruneFiredKeys(firedBefore, notificationBuckets);
+  const alertsToFire = determineAlertsToFire(notificationBuckets, prunedFired);
   // Every crossed threshold is marked fired, but at most one (the highest) is notified per bucket.
   const alertsToNotify = selectAlertsToNotify(alertsToFire);
 
   // Reset events carry no dedup state (thresholds.ts): firing makes the post-reset value the next
   // baseline, so the same reset cannot fire twice.
-  const resetEventsToFire = determineResetEvents(baselineBuckets, freshBuckets);
+  const resetEventsToFire = determineResetEvents(baselineBuckets, notificationBuckets);
 
   // Persisted BEFORE the notify await (not after): two overlapping loads (interval tick +
   // "Aktualisieren") both run their synchronous part up to this point before either suspends on
@@ -145,5 +150,5 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
     }
   }
 
-  return { report, runError: null };
+  return { report: effectiveReport, runError: null };
 }
