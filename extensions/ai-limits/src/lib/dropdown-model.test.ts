@@ -162,7 +162,7 @@ describe("buildDropdownModel — account sections", () => {
     expect(model.accountSections[0].rows[0].severity).to.equal("critical");
   });
 
-  it("Stand HH:MM equals the oldest observedAt among that account's buckets", () => {
+  it("Updated HH:MM equals the oldest observedAt among that account's buckets", () => {
     const older = new Date("2026-09-16T11:10:00.000Z");
     const newer = new Date("2026-09-16T11:19:00.000Z");
     const report = aiLimitsReport({
@@ -174,31 +174,31 @@ describe("buildDropdownModel — account sections", () => {
       plans: [],
     });
     const model = buildDropdownModel(report);
-    expect(model.accountSections[0].standLabel).to.equal(`Stand ${formatTimeShort(older)}`);
+    expect(model.accountSections[0].standLabel).to.equal(`Updated ${formatTimeShort(older)}`);
   });
 
-  it("appends ' (veraltet)' to Stand when errors[] exist for that provider/account pair", () => {
+  it("appends ' (stale)' to Updated when errors[] exist for that provider/account pair", () => {
     const observedAt = new Date("2026-09-16T11:10:00.000Z");
     const report = aiLimitsReport({
       accounts: [reportAccount({ name: "work", label: "w" })],
       buckets: [anthropicBucket("work", "anthropic.session", { percent: 10, elapsedPercent: 40, observedAt })],
-      errors: [{ provider: "anthropic", account: "work", message: "teilweise fehlgeschlagen" }],
+      errors: [{ provider: "anthropic", account: "work", message: "partially failed" }],
       plans: [],
     });
     const model = buildDropdownModel(report);
-    expect(model.accountSections[0].standLabel).to.equal(`Stand ${formatTimeShort(observedAt)} (veraltet)`);
+    expect(model.accountSections[0].standLabel).to.equal(`Updated ${formatTimeShort(observedAt)} (stale)`);
   });
 
-  it("does not append the veraltet suffix for a different account's errors", () => {
+  it("does not append the stale suffix for a different account's errors", () => {
     const observedAt = new Date("2026-09-16T11:10:00.000Z");
     const report = aiLimitsReport({
       accounts: [reportAccount({ name: "work", label: "w" }), reportAccount({ name: "private", label: "p" })],
       buckets: [anthropicBucket("work", "anthropic.session", { percent: 10, elapsedPercent: 40, observedAt })],
-      errors: [{ provider: "anthropic", account: "private", message: "teilweise fehlgeschlagen" }],
+      errors: [{ provider: "anthropic", account: "private", message: "partially failed" }],
       plans: [],
     });
     const model = buildDropdownModel(report);
-    expect(model.accountSections[0].standLabel).to.equal(`Stand ${formatTimeShort(observedAt)}`);
+    expect(model.accountSections[0].standLabel).to.equal(`Updated ${formatTimeShort(observedAt)}`);
   });
 
   it("skipped entries for the account appear as skippedRows carrying the raw reason", () => {
@@ -214,14 +214,14 @@ describe("buildDropdownModel — account sections", () => {
 });
 
 describe("buildDropdownModel — codex section", () => {
-  it("shows 'Reset-Credits: 0 verfügbar' for reset_credits 0, with no redeem subtitle", () => {
+  it("shows 'Reset credits: 0 available' for reset_credits 0, with no redeem subtitle", () => {
     const report = aiLimitsReport({ accounts: [], buckets: [], plans: [], resetCredits: 0 });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset-Credits: 0 verfügbar");
+    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: 0 available");
     expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
   });
 
-  it("shows 'Reset-Credits: 3 verfügbar' with the redeem subtitle when the primary bucket is at/over 100%", () => {
+  it("shows 'Reset credits: 3 available' with the redeem subtitle when the primary bucket is at/over 100%", () => {
     const report = aiLimitsReport({
       accounts: [],
       buckets: [codexBucket("codex.primary", { percent: 100, elapsedPercent: 70 })],
@@ -229,11 +229,11 @@ describe("buildDropdownModel — codex section", () => {
       resetCredits: 3,
     });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset-Credits: 3 verfügbar");
-    expect(model.codexSection.resetCreditsSubtitle).to.equal("Einlösen: codex → /usage");
+    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: 3 available");
+    expect(model.codexSection.resetCreditsSubtitle).to.equal("Redeem: codex → /usage");
   });
 
-  it("shows 'Reset-Credits: 3 verfügbar' without the redeem subtitle when the primary bucket is below 100%", () => {
+  it("shows 'Reset credits: 3 available' without the redeem subtitle when the primary bucket is below 100%", () => {
     const report = aiLimitsReport({
       accounts: [],
       buckets: [codexBucket("codex.primary", { percent: 40, elapsedPercent: 70 })],
@@ -241,11 +241,11 @@ describe("buildDropdownModel — codex section", () => {
       resetCredits: 3,
     });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset-Credits: 3 verfügbar");
+    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: 3 available");
     expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
   });
 
-  it("shows 'Reset-Credits: unbekannt' for a null reset_credits", () => {
+  it("shows 'Reset credits: unknown' for a null reset_credits", () => {
     const report = aiLimitsReport({
       accounts: [],
       buckets: [codexBucket("codex.primary", { percent: 100, elapsedPercent: 70 })],
@@ -253,11 +253,11 @@ describe("buildDropdownModel — codex section", () => {
       resetCredits: null,
     });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset-Credits: unbekannt");
+    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: unknown");
     expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
   });
 
-  it("codex rows carry raw label/percent and Stand from the codex bucket's observedAt", () => {
+  it("codex rows carry raw label/percent and Updated from the codex bucket's observedAt", () => {
     const observedAt = new Date("2026-09-16T11:15:00.000Z");
     const report = aiLimitsReport({
       accounts: [],
@@ -275,7 +275,7 @@ describe("buildDropdownModel — codex section", () => {
         resetsAt: report.buckets[0].resetsAt,
       },
     ]);
-    expect(model.codexSection.standLabel).to.equal(`Stand ${formatTimeShort(observedAt)}`);
+    expect(model.codexSection.standLabel).to.equal(`Updated ${formatTimeShort(observedAt)}`);
   });
 
   it("codex errors surface as errorRows on the codex section", () => {

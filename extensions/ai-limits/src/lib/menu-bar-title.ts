@@ -58,7 +58,7 @@ const SUPERSCRIPT_TABLE: Record<string, string> = {
 function superscript(label: string): string {
   const glyph = SUPERSCRIPT_TABLE[label];
   if (glyph === undefined) {
-    throw new Error(`ai-limits: kein Hochstellzeichen fuer Account-Label "${label}" (erwartet [a-pr-z0-9])`);
+    throw new Error(`ai-limits: no superscript glyph for account label "${label}" (expected [a-pr-z0-9])`);
   }
   return glyph;
 }

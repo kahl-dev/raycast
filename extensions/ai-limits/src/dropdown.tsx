@@ -1,7 +1,7 @@
 import { Color, Icon, MenuBarExtra } from "@raycast/api";
 import * as cache from "./lib/cache";
 import { buildDropdownModel, DropdownBucketRow } from "./lib/dropdown-model";
-import { formatResetGerman, formatWeekdayAndTime } from "./lib/format";
+import { formatReset, formatWeekdayAndTime } from "./lib/format";
 import { AiLimitsReport } from "./lib/report";
 import { projectLimitHit } from "./lib/projection";
 import { Severity } from "./lib/types";
@@ -25,7 +25,7 @@ function BucketRow({ row, now }: { row: DropdownBucketRow; now: Date }) {
   return (
     <MenuBarExtra.Item
       title={`${row.label}: ${Math.round(row.percent)}%`}
-      subtitle={`Reset ${formatResetGerman(row.resetsAt, now)}${projectionSuffix}`}
+      subtitle={`Reset ${formatReset(row.resetsAt, now)}${projectionSuffix}`}
       icon={{ source: Icon.Circle, tintColor: severityColor(row.severity) }}
     />
   );
@@ -51,12 +51,12 @@ export function DropdownContent(props: DropdownContentProps) {
           {/* Keyed by index, not by message: two limits failing the same way produce byte-identical
               messages, and a duplicate key drops one of the rows. */}
           {section.errorRows.map((error, index) => (
-            <MenuBarExtra.Item key={`error-${index}`} title="Fehler" subtitle={error.message} icon={Icon.Warning} />
+            <MenuBarExtra.Item key={`error-${index}`} title="Error" subtitle={error.message} icon={Icon.Warning} />
           ))}
           {section.skippedRows.map((skipped, index) => (
             <MenuBarExtra.Item
               key={`skipped-${index}`}
-              title="Limit nicht lesbar"
+              title="Limit not readable"
               subtitle={skipped.reason}
               icon={Icon.Warning}
             />
@@ -73,7 +73,7 @@ export function DropdownContent(props: DropdownContentProps) {
           {model.codexSection.errorRows.map((error, index) => (
             <MenuBarExtra.Item
               key={`codex-error-${index}`}
-              title="Fehler"
+              title="Error"
               subtitle={error.message}
               icon={Icon.Warning}
             />
@@ -81,7 +81,7 @@ export function DropdownContent(props: DropdownContentProps) {
           {model.codexSection.skippedRows.map((skipped, index) => (
             <MenuBarExtra.Item
               key={`codex-skipped-${index}`}
-              title="Limit nicht lesbar"
+              title="Limit not readable"
               subtitle={skipped.reason}
               icon={Icon.Warning}
             />
@@ -97,14 +97,12 @@ export function DropdownContent(props: DropdownContentProps) {
 
       <MenuBarExtra.Section>
         <MenuBarExtra.Item
-          title="Aktualisieren"
+          title="Refresh"
           icon={Icon.ArrowClockwise}
           onAction={props.onRefresh}
           shortcut={{ modifiers: ["cmd"], key: "r" }}
         />
-        {props.runError && (
-          <MenuBarExtra.Item title="ai-limits fehlgeschlagen" subtitle={props.runError} icon={Icon.Warning} />
-        )}
+        {props.runError && <MenuBarExtra.Item title="ai-limits failed" subtitle={props.runError} icon={Icon.Warning} />}
       </MenuBarExtra.Section>
     </>
   );

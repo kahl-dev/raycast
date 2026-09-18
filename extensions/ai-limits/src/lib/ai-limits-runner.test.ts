@@ -102,7 +102,7 @@ describe("runAiLimits", () => {
         env: { PATH: "/usr/bin:/bin" },
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow(/Exit-Code 1\b/);
+    ).rejects.toThrow(/exit code 1\b/);
     await expect(
       runAiLimits({
         command: "/bin/sh",
@@ -132,7 +132,7 @@ describe("runAiLimits", () => {
         env: { PATH: "/usr/bin:/bin" },
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow(/kein valides JSON/);
+    ).rejects.toThrow(/not valid JSON/);
   });
 
   it("resolves with the parsed report on exit 1 when stdout is a valid report (ai-limits' no-data exit code)", async () => {
@@ -163,7 +163,7 @@ describe("runAiLimits", () => {
         env: { PATH: "/usr/bin:/bin" },
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow(/Exit-Code 1\b/);
+    ).rejects.toThrow(/exit code 1\b/);
     await expect(
       runAiLimits({
         command: "/bin/sh",
@@ -182,7 +182,7 @@ describe("runAiLimits", () => {
         env: { PATH: "/usr/bin:/bin" },
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow(/Exit-Code 2\b/);
+    ).rejects.toThrow(/exit code 2\b/);
     await expect(
       runAiLimits({
         command: "/bin/sh",

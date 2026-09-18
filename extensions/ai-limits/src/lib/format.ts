@@ -1,6 +1,6 @@
 import { secondsUntil } from "./types";
 
-const WEEKDAY_LABELS_GERMAN = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
@@ -37,10 +37,10 @@ export function formatWeekdayAndTime(date: Date, now: Date = new Date()): string
     return time;
   }
 
-  return `${WEEKDAY_LABELS_GERMAN[date.getDay()]} ${time}`;
+  return `${WEEKDAY_LABELS[date.getDay()]} ${time}`;
 }
 
-export function formatResetGerman(date: Date, now: Date = new Date()): string {
+export function formatReset(date: Date, now: Date = new Date()): string {
   const base = formatWeekdayAndTime(date, now);
   const secondsUntilReset = secondsUntil(date, now);
 

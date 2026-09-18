@@ -318,7 +318,7 @@ describe("loadUsageData — freshness gate", () => {
     });
     await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls.some((call) => (call[1] as string).includes("resettet"))).to.equal(false);
+    expect(notify.mock.calls.some((call) => (call[1] as string).includes("has reset"))).to.equal(false);
 
     const run3 = rawReport({
       buckets: [rawBucket({ percent: 86, observed_at: "2026-09-16T12:25:00.000Z" })],
@@ -382,7 +382,7 @@ describe("loadUsageData — fired keys survive an absent or stale bucket", () =>
     });
     await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
     expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[1][1]).to.match(/-Limit resettet/);
+    expect(notify.mock.calls[1][1]).to.match(/has reset/);
 
     const run3 = rawReport({
       buckets: [rawBucket({ id: "anthropic.weekly.fable", percent: 96, observed_at: "2026-09-16T12:30:00.000Z" })],
@@ -446,7 +446,7 @@ describe("loadUsageData — stale cache served after a 429 backoff", () => {
     });
     await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => run2, notify });
     expect(notify.mock.calls.length).to.equal(countAfterRun1 + 1);
-    expect(notify.mock.calls[notify.mock.calls.length - 1][1] as string).to.match(/resettet/);
+    expect(notify.mock.calls[notify.mock.calls.length - 1][1] as string).to.match(/has reset/);
 
     // ai-limits fell back to a pre-reset cache entry after a 429 backoff: 92% observed at 12:00,
     // older than the 3% already persisted from run2 (observed 12:20).

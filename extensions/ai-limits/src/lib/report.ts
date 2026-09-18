@@ -63,21 +63,21 @@ export interface AiLimitsReport {
 
 function assertObject(value: unknown, context: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
-    throw new Error(`ai-limits: ${context} ist kein Objekt: ${JSON.stringify(value)}`);
+    throw new Error(`ai-limits: ${context} is not an object: ${JSON.stringify(value)}`);
   }
   return value as Record<string, unknown>;
 }
 
 function requireString(value: unknown, context: string): string {
   if (typeof value !== "string") {
-    throw new Error(`ai-limits: ${context} ist kein String: ${JSON.stringify(value)}`);
+    throw new Error(`ai-limits: ${context} is not a string: ${JSON.stringify(value)}`);
   }
   return value;
 }
 
 function requireBoolean(value: unknown, context: string): boolean {
   if (typeof value !== "boolean") {
-    throw new Error(`ai-limits: ${context} ist kein Boolean: ${JSON.stringify(value)}`);
+    throw new Error(`ai-limits: ${context} is not a boolean: ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -86,14 +86,14 @@ function requireDate(value: unknown, context: string): Date {
   const raw = requireString(value, context);
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) {
-    throw new Error(`ai-limits: ${context} ist kein valides ISO-8601-Datum: ${raw}`);
+    throw new Error(`ai-limits: ${context} is not a valid ISO 8601 date: ${raw}`);
   }
   return date;
 }
 
 function requireFiniteNumber(value: unknown, context: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`ai-limits: ${context} ist keine endliche Zahl: ${JSON.stringify(value)}`);
+    throw new Error(`ai-limits: ${context} is not a finite number: ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -114,7 +114,7 @@ function requireNumberOrNull(value: unknown, context: string): number | null {
 
 function requireArray(value: unknown, context: string): unknown[] {
   if (!Array.isArray(value)) {
-    throw new Error(`ai-limits: ${context} ist keine Liste: ${JSON.stringify(value)}`);
+    throw new Error(`ai-limits: ${context} is not a list: ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -124,7 +124,7 @@ function parseAccount(raw: unknown, index: number): ReportAccount {
   const name = requireString(object.name, `accounts[${index}].name`);
   const label = requireString(object.label, `accounts[${index}].label`);
   if (label.length !== 1) {
-    throw new Error(`ai-limits: accounts[${index}].label muss genau ein Zeichen sein, war "${label}"`);
+    throw new Error(`ai-limits: accounts[${index}].label must be exactly one character, was "${label}"`);
   }
   return { name, label };
 }
@@ -132,7 +132,7 @@ function parseAccount(raw: unknown, index: number): ReportAccount {
 function parseProvider(value: unknown, context: string): ReportProvider {
   const raw = requireString(value, context);
   if (raw !== "anthropic" && raw !== "codex") {
-    throw new Error(`ai-limits: ${context} ist kein bekannter Provider (anthropic|codex): "${raw}"`);
+    throw new Error(`ai-limits: ${context} is not a known provider (anthropic|codex): "${raw}"`);
   }
   return raw;
 }
@@ -147,14 +147,12 @@ function parseBucket(raw: unknown, index: number): ReportBucket {
   const resetsAt = requireDate(object.resets_at, `buckets[${index}].resets_at`);
   const windowSeconds = requireFiniteNumber(object.window_seconds, `buckets[${index}].window_seconds`);
   if (windowSeconds <= 0) {
-    throw new Error(`ai-limits: buckets[${index}].window_seconds muss > 0 sein, war ${windowSeconds}`);
+    throw new Error(`ai-limits: buckets[${index}].window_seconds must be > 0, was ${windowSeconds}`);
   }
   const observedAt = requireDate(object.observed_at, `buckets[${index}].observed_at`);
   const elapsedPercent = requireFiniteNumber(object.elapsed_percent, `buckets[${index}].elapsed_percent`);
   if (elapsedPercent < 0 || elapsedPercent > 100) {
-    throw new Error(
-      `ai-limits: buckets[${index}].elapsed_percent muss zwischen 0 und 100 liegen, war ${elapsedPercent}`,
-    );
+    throw new Error(`ai-limits: buckets[${index}].elapsed_percent must be between 0 and 100, was ${elapsedPercent}`);
   }
   return {
     key: `${provider}:${account}:${id}`,
@@ -217,7 +215,7 @@ export function parseAiLimitsReport(raw: unknown): AiLimitsReport {
   const errors = requireArray(object.errors, "errors").map((entry, index) => parseError(entry, index));
   const skipped = requireArray(object.skipped, "skipped").map((entry, index) => parseSkipped(entry, index));
   if (!("reset_credits" in object)) {
-    throw new Error("ai-limits: reset_credits fehlt");
+    throw new Error("ai-limits: reset_credits is missing");
   }
   const resetCredits = requireNumberOrNull(object.reset_credits, "reset_credits");
   const plans = requireArray(object.plans, "plans").map((entry, index) => parsePlan(entry, index));

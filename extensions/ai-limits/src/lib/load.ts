@@ -129,7 +129,7 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   const resetEventsToFire = determineResetEvents(baselineBuckets, notificationBuckets);
 
   // Persisted BEFORE the notify await (not after): two overlapping loads (interval tick +
-  // "Aktualisieren") both run their synchronous part up to this point before either suspends on
+  // "Refresh") both run their synchronous part up to this point before either suspends on
   // notify, so a write here — not after the await — is what a second overlapping call resumes into
   // and reads as already-fired. Trade-off accepted: a failed osascript notification (logged below)
   // no longer re-fires on the next run, since the key is marked fired regardless of delivery.
@@ -146,7 +146,7 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   ]);
   for (const result of notificationResults) {
     if (result.status === "rejected") {
-      console.error("AI Limits: Notification fehlgeschlagen", result.reason);
+      console.error("AI Limits: notification failed", result.reason);
     }
   }
 

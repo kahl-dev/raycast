@@ -1,4 +1,4 @@
-import { formatResetGerman } from "./format";
+import { formatReset } from "./format";
 import { WARNING_THRESHOLD, CRITICAL_THRESHOLD } from "./types";
 
 export const ALERT_THRESHOLDS = [WARNING_THRESHOLD, CRITICAL_THRESHOLD] as const;
@@ -97,7 +97,7 @@ export function selectAlertsToNotify(fired: FiredAlert[]): FiredAlert[] {
 }
 
 export function formatAlertMessage(bucket: AlertBucket, threshold: AlertThreshold, now: Date = new Date()): string {
-  return `${bucket.label}-Limit bei ${Math.round(bucket.percent)}% — Reset ${formatResetGerman(bucket.resetsAt, now)}`;
+  return `${bucket.label} at ${Math.round(bucket.percent)}% — resets ${formatReset(bucket.resetsAt, now)}`;
 }
 
 export interface ResetEvent {
@@ -135,5 +135,5 @@ export function determineResetEvents(previousBuckets: AlertBucket[], currentBuck
 }
 
 export function formatResetMessage(bucket: AlertBucket): string {
-  return `${bucket.label}-Limit resettet — wieder verfügbar`;
+  return `${bucket.label} has reset — available again`;
 }

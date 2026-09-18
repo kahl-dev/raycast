@@ -125,11 +125,11 @@ describe("pruneFiredKeys", () => {
 });
 
 describe("formatAlertMessage", () => {
-  it("matches the German alert wording with label, rounded percent, and reset time", () => {
+  it("matches the alert wording with label, rounded percent, and reset time", () => {
     const b = bucket({ label: "Fable", percent: 82.4, resetsAt: new Date(2026, 6, 27, 22, 0) });
     const now = new Date(2026, 6, 21, 8, 0);
 
-    expect(formatAlertMessage(b, 80, now)).to.equal("Fable-Limit bei 82% — Reset Mo 22:00 (in 6d 14h)");
+    expect(formatAlertMessage(b, 80, now)).to.equal("Fable at 82% — resets Mon 22:00 (in 6d 14h)");
   });
 });
 
@@ -208,8 +208,8 @@ describe("determineResetEvents", () => {
 });
 
 describe("formatResetMessage", () => {
-  it("matches the German reset wording", () => {
+  it("matches the reset wording", () => {
     const b = bucket({ label: "Fable" });
-    expect(formatResetMessage(b)).to.equal("Fable-Limit resettet — wieder verfügbar");
+    expect(formatResetMessage(b)).to.equal("Fable has reset — available again");
   });
 });

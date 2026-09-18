@@ -67,15 +67,15 @@ function oldestObservedAt(buckets: ReportBucket[]): Date | null {
   );
 }
 
-// null (no "Stand" row at all) only when the account/pair has no buckets — an account with only
+// null (no "Updated" row at all) only when the account/pair has no buckets — an account with only
 // errors renders its error rows without a timestamp that would otherwise claim a measurement.
 function buildStandLabel(buckets: ReportBucket[], hasErrors: boolean): string | null {
   const oldest = oldestObservedAt(buckets);
   if (oldest === null) {
     return null;
   }
-  const base = `Stand ${formatTimeShort(oldest)}`;
-  return hasErrors ? `${base} (veraltet)` : base;
+  const base = `Updated ${formatTimeShort(oldest)}`;
+  return hasErrors ? `${base} (stale)` : base;
 }
 
 export function shouldShowRedeemHint(primaryCodexPercent: number | null): boolean {
@@ -115,13 +115,13 @@ export function buildDropdownModel(report: AiLimitsReport): DropdownModel {
     .map((skipped) => ({ reason: skipped.reason }));
   const primaryCodexBucket = codexBuckets.find((bucket) => bucket.id === "codex.primary") ?? null;
   const resetCreditsLabel =
-    report.resetCredits === null ? "Reset-Credits: unbekannt" : `Reset-Credits: ${report.resetCredits} verfügbar`;
+    report.resetCredits === null ? "Reset credits: unknown" : `Reset credits: ${report.resetCredits} available`;
   // "N > 0" gates the redeem hint independently of the pace-based shouldShowRedeemHint check: a
   // maxed-out primary bucket with zero reset credits has nothing to redeem.
   const hasRedeemableCredits = report.resetCredits !== null && report.resetCredits > 0;
   const resetCreditsSubtitle =
     hasRedeemableCredits && shouldShowRedeemHint(primaryCodexBucket ? primaryCodexBucket.percent : null)
-      ? "Einlösen: codex → /usage"
+      ? "Redeem: codex → /usage"
       : null;
 
   const codexSection: DropdownCodexSection = {

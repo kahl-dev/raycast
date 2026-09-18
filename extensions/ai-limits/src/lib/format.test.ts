@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDurationShort, formatResetGerman, formatTimeShort } from "./format";
+import { formatDurationShort, formatReset, formatTimeShort } from "./format";
 
 describe("formatTimeShort", () => {
   it("zero-pads single-digit hours and minutes", () => {
@@ -39,31 +39,31 @@ describe("formatDurationShort", () => {
   });
 });
 
-describe("formatResetGerman", () => {
+describe("formatReset", () => {
   it("returns time plus countdown when the reset is later today", () => {
     const now = new Date(2026, 6, 21, 8, 0);
     const resetsAt = new Date(2026, 6, 21, 11, 29);
 
-    expect(formatResetGerman(resetsAt, now)).to.equal("11:29 (in 3h 29m)");
+    expect(formatReset(resetsAt, now)).to.equal("11:29 (in 3h 29m)");
   });
 
   it("returns weekday, time, and countdown when the reset is on a different day", () => {
     const now = new Date(2026, 6, 21, 8, 0); // Tuesday
     const resetsAt = new Date(2026, 6, 27, 22, 0); // Monday next week
 
-    expect(formatResetGerman(resetsAt, now)).to.equal("Mo 22:00 (in 6d 14h)");
+    expect(formatReset(resetsAt, now)).to.equal("Mon 22:00 (in 6d 14h)");
   });
 
   it("boundary: omits the countdown when resetsAt equals now", () => {
     const now = new Date(2026, 6, 21, 8, 0);
 
-    expect(formatResetGerman(now, now)).to.equal("08:00");
+    expect(formatReset(now, now)).to.equal("08:00");
   });
 
   it("boundary: omits the countdown when resetsAt is in the past", () => {
     const now = new Date(2026, 6, 21, 8, 0);
     const resetsAt = new Date(2026, 6, 21, 7, 0);
 
-    expect(formatResetGerman(resetsAt, now)).to.equal("07:00");
+    expect(formatReset(resetsAt, now)).to.equal("07:00");
   });
 });
