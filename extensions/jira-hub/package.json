@@ -113,7 +113,7 @@
   },
   "scripts": {
     "build": "ray build -e dist",
-    "dev": "RAY_Target=x ray develop",
+    "dev": "ray develop",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "ray lint"

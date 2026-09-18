@@ -50,11 +50,11 @@ extension change run `bun run dev` once, verify the commands in Raycast, then st
 persists without the dev server. Skipping this shipped a months-stale 2-of-4-command build while all
 tests were green (2026-07-06 audit).
 
-**The deploy target is pinned per extension.** Every extension here uses
-`"dev": "RAY_Target=x ray develop"`, which deploys into Raycast Beta (`com.raycast-x.macos`,
-`~/.config/raycast-x/extensions/`) — the app in daily use. Without that pin the CLI defaults to
-Stable, which is installed but never opened, and the deploy reports success while nothing visible
-changes. New extensions need the same pin.
+**Plain `ray develop` is the convention.** Every extension here uses `"dev": "ray develop"` (no
+`RAY_Target`). The running app is the release build (`com.raycast.macos`), with extensions under
+`~/.config/raycast/extensions/`. `RAY_Target=x` would deploy into Raycast X, which is not in use —
+verified 2026-09-18: all seven extensions present in the release config, Raycast X empty apart from
+one misdirected build.
 
 **After a re-import, deploy again.** Removing and re-importing an extension in Raycast can leave its
 directory holding only `package.json` and `assets/`: every command listed, none runnable, each
@@ -94,7 +94,7 @@ Gotchas:
 - Notifications go through `osascript` (`src/lib/notify.ts`) — `showToast`/`showHUD` do not surface on background interval launches.
 - `ray lint` parses every file under `src/`, including shell scripts. Test fixtures that must be executables are written to a tmpdir at test runtime (see `ai-limits-runner.test.ts`), never committed under `src/`.
 - `interval` must match Raycast's manifest regex `^(\d+)(s|m|h|d)$` (integers only: `150s`, not `2.5m`).
-- Deploy target: this extension uses plain `ray develop` (no `RAY_Target=x`). Verified 2026-09-16: the running app is `/Applications/Raycast.app` (`com.raycast.macos`, extensions under `~/.config/raycast/extensions/`); with `RAY_Target=x` the build landed in `~/.config/raycast-x/extensions/` and never ran. The repo-wide `RAY_Target=x` convention described above was not re-verified for the other extensions. `ray build -e dist` also writes into `~/.config/raycast/extensions/<name>/`, but the running command keeps the old code until the next `ray develop` import.
+- Deploy target: this extension uses plain `ray develop` (no `RAY_Target=x`). Verified 2026-09-16: the running app is `/Applications/Raycast.app` (`com.raycast.macos`, extensions under `~/.config/raycast/extensions/`); with `RAY_Target=x` the build landed in `~/.config/raycast-x/extensions/` and never ran. `ray build -e dist` also writes into `~/.config/raycast/extensions/<name>/`, but the running command keeps the old code until the next `ray develop` import.
 
 ### Script Commands
 
