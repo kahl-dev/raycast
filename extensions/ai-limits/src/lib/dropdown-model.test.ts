@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aiLimitsReport, reportAccount, reportBucket } from "./__fixtures__/report";
 import { buildDropdownModel, DropdownAccountSection, shouldShowRedeemHint } from "./dropdown-model";
-import { formatTimeShort } from "./format";
+import { formatReset, formatTimeShort } from "./format";
 
 function anthropicBucket(account: string, id: string, overrides: Partial<Parameters<typeof reportBucket>[0]> = {}) {
   return reportBucket({
@@ -83,7 +83,8 @@ describe("buildDropdownModel — account sections", () => {
     expect(model.accountSections[0].standLabel).to.equal(null);
   });
 
-  it("bucket rows follow report order and carry raw label/percent/resetsAt", () => {
+  it("bucket rows follow report order and compose title from label/percent/resetsAt via formatReset", () => {
+    const now = new Date("2026-09-18T12:59:00.000Z");
     const resetsAt = new Date("2026-09-20T10:53:00.000Z");
     const report = aiLimitsReport({
       accounts: [reportAccount({ name: "work", label: "w" })],
@@ -103,19 +104,17 @@ describe("buildDropdownModel — account sections", () => {
       ],
       plans: [],
     });
-    const model = buildDropdownModel(report);
+    const model = buildDropdownModel(report, now);
     expect(model.accountSections[0].rows).to.deep.equal([
       {
         key: "anthropic:work:anthropic.weekly_all",
-        label: "Weekly (all models)",
-        percent: 85,
+        title: `Weekly (all models): 85% · resets ${formatReset(resetsAt, now)}`,
         severity: "warning",
         resetsAt,
       },
       {
         key: "anthropic:work:anthropic.session",
-        label: "Session (5h)",
-        percent: 10,
+        title: `Session (5h): 10% · resets ${formatReset(resetsAt, now)}`,
         severity: "normal",
         resetsAt,
       },
@@ -257,7 +256,8 @@ describe("buildDropdownModel — codex section", () => {
     expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
   });
 
-  it("codex rows carry raw label/percent and Updated from the codex bucket's observedAt", () => {
+  it("codex rows compose title from label/percent and Updated from the codex bucket's observedAt", () => {
+    const now = new Date("2026-09-18T12:59:00.000Z");
     const observedAt = new Date("2026-09-16T11:15:00.000Z");
     const report = aiLimitsReport({
       accounts: [],
@@ -265,12 +265,11 @@ describe("buildDropdownModel — codex section", () => {
       plans: [],
       resetCredits: 0,
     });
-    const model = buildDropdownModel(report);
+    const model = buildDropdownModel(report, now);
     expect(model.codexSection.rows).to.deep.equal([
       {
         key: "codex:default:codex.primary",
-        label: "Primary (7d)",
-        percent: 100,
+        title: `Primary (7d): 100% · resets ${formatReset(report.buckets[0].resetsAt, now)}`,
         severity: "critical",
         resetsAt: report.buckets[0].resetsAt,
       },

@@ -1,11 +1,12 @@
-import { formatTimeShort } from "./format";
+import { formatReset, formatTimeShort } from "./format";
 import { AiLimitsReport, ReportBucket } from "./report";
 import { CRITICAL_THRESHOLD, paceSeverity, Severity } from "./types";
 
 export interface DropdownBucketRow {
   key: string;
-  label: string;
-  percent: number;
+  // Primary line: "<label>: <percent>% · resets <formatReset>" — the reset time and countdown
+  // live here, not in the subtitle, so macOS doesn't grey them out as secondary text.
+  title: string;
   severity: Severity;
   resetsAt: Date;
 }
@@ -47,11 +48,10 @@ function computeSeverity(bucket: ReportBucket): Severity {
   return paceSeverity(bucket.percent, bucket.elapsedPercent);
 }
 
-function toRow(bucket: ReportBucket): DropdownBucketRow {
+function toRow(bucket: ReportBucket, now: Date): DropdownBucketRow {
   return {
     key: bucket.key,
-    label: bucket.label,
-    percent: bucket.percent,
+    title: `${bucket.label}: ${Math.round(bucket.percent)}% · resets ${formatReset(bucket.resetsAt, now)}`,
     severity: computeSeverity(bucket),
     resetsAt: bucket.resetsAt,
   };
@@ -82,7 +82,7 @@ export function shouldShowRedeemHint(primaryCodexPercent: number | null): boolea
   return primaryCodexPercent !== null && primaryCodexPercent >= 100;
 }
 
-export function buildDropdownModel(report: AiLimitsReport): DropdownModel {
+export function buildDropdownModel(report: AiLimitsReport, now: Date = new Date()): DropdownModel {
   const accountSections: DropdownAccountSection[] = report.accounts.map((account) => {
     const buckets = report.buckets.filter(
       (bucket) => bucket.provider === "anthropic" && bucket.account === account.name,
@@ -99,7 +99,7 @@ export function buildDropdownModel(report: AiLimitsReport): DropdownModel {
 
     return {
       title,
-      rows: buckets.map(toRow),
+      rows: buckets.map((bucket) => toRow(bucket, now)),
       errorRows,
       skippedRows,
       standLabel: buildStandLabel(buckets, errorRows.length > 0),
@@ -125,7 +125,7 @@ export function buildDropdownModel(report: AiLimitsReport): DropdownModel {
       : null;
 
   const codexSection: DropdownCodexSection = {
-    rows: codexBuckets.map(toRow),
+    rows: codexBuckets.map((bucket) => toRow(bucket, now)),
     errorRows: codexErrorRows,
     skippedRows: codexSkippedRows,
     standLabel: buildStandLabel(codexBuckets, codexErrorRows.length > 0),
