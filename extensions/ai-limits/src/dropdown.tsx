@@ -114,12 +114,16 @@ export function DropdownContent(props: DropdownContentProps) {
               onAction={() => copyToClipboard(rowText("Limit not readable", skipped.reason))}
             />
           ))}
-          <MenuBarExtra.Item
-            title={codexSection.resetCreditsLabel}
-            subtitle={codexSection.resetCreditsSubtitle ?? undefined}
-            icon={Icon.Coins}
-            onAction={() => copyToClipboard(rowText(codexSection.resetCreditsLabel, codexSection.resetCreditsSubtitle))}
-          />
+          {/* Keyed by index: two credits with the same title and expiry produce identical rows. */}
+          {codexSection.resetCreditRows.map((row, index) => (
+            <MenuBarExtra.Item
+              key={`codex-reset-credit-${index}`}
+              title={row.title}
+              subtitle={row.subtitle ?? undefined}
+              icon={Icon.Coins}
+              onAction={() => copyToClipboard(rowText(row.title, row.subtitle))}
+            />
+          ))}
           {codexStandLabel && (
             <MenuBarExtra.Item title={codexStandLabel} onAction={() => copyToClipboard(codexStandLabel)} />
           )}

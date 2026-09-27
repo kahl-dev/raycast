@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { aiLimitsReport, reportAccount, reportBucket } from "./__fixtures__/report";
 import { LoadCacheDependencies, loadUsageData } from "./load";
 import { HistoryPoint } from "./projection";
@@ -8,6 +8,7 @@ interface FakeCacheStore {
   lastGoodReport: AiLimitsReport | null;
   lastObservedAt: Record<string, Date | null>;
   firedAlertKeys: Set<string>;
+  firedExpiryWarningIds: Set<string>;
   bucketHistory: Record<string, HistoryPoint[]>;
 }
 
@@ -19,6 +20,7 @@ function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDepend
     lastGoodReport: null,
     lastObservedAt: {},
     firedAlertKeys: new Set<string>(),
+    firedExpiryWarningIds: new Set<string>(),
     bucketHistory: {},
     ...initial,
   };
@@ -35,6 +37,10 @@ function createFakeCache(initial: Partial<FakeCacheStore> = {}): LoadCacheDepend
     getFiredAlertKeys: vi.fn((): Set<string> => new Set(store.firedAlertKeys)),
     setFiredAlertKeys: vi.fn((keys: Set<string>): void => {
       store.firedAlertKeys = new Set(keys);
+    }),
+    getFiredExpiryWarningIds: vi.fn((): Set<string> => new Set(store.firedExpiryWarningIds)),
+    setFiredExpiryWarningIds: vi.fn((ids: Set<string>): void => {
+      store.firedExpiryWarningIds = new Set(ids);
     }),
     getBucketHistory: vi.fn((bucketKey: string): HistoryPoint[] => store.bucketHistory[bucketKey] ?? []),
     setBucketHistory: vi.fn((bucketKey: string, history: HistoryPoint[]): void => {
@@ -67,6 +73,7 @@ function rawReport(overrides: Record<string, unknown> = {}) {
     errors: [],
     skipped: [],
     reset_credits: null,
+    reset_credit_entries: null,
     plans: [],
     sources: [],
     ...overrides,
@@ -516,5 +523,213 @@ describe("loadUsageData — notification delivery", () => {
     await loadUsageData({ now: () => NOW, cache, runAiLimits: async () => raw, notify });
 
     expect(notify.mock.calls[0][1]).to.match(/^Codex · Primary \(7d\)/);
+  });
+});
+
+// The expiry instants are real UTC timestamps; their local calendar day ("22 Oct") holds in the
+// user's zone but not east of UTC+3:28, so the zone is pinned for the date-formatting assertions.
+// Node re-reads TZ whenever process.env.TZ is assigned.
+beforeAll(() => {
+  vi.stubEnv("TZ", "Europe/Berlin");
+});
+
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
+
+const CREDIT_ID = "RateLimitResetCredit_6ebf262083f08191adacb227e3b1b96b";
+const CREDIT_EXPIRES_AT = new Date("2026-10-22T20:31:07.000Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function rawResetCreditEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    provider: "codex",
+    account: "default",
+    id: CREDIT_ID,
+    reset_type: "codexRateLimits",
+    status: "available",
+    title: "Full reset",
+    granted_at: "2026-09-22T20:31:07Z",
+    expires_at: "2026-10-22T20:31:07Z",
+    ...overrides,
+  };
+}
+
+function daysBeforeExpiry(days: number): Date {
+  return new Date(CREDIT_EXPIRES_AT.getTime() - days * DAY_MS);
+}
+
+describe("loadUsageData — reset credit expiry warning", () => {
+  it("sends nothing and persists nothing four days before expiry", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(4), cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(cache.setFiredExpiryWarningIds).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one notification two days before expiry and persists the credit id", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(2), cache, runAiLimits: async () => raw, notify });
+
+    expect(notify.mock.calls).to.deep.equal([["AI Limits", "Codex reset credit expires in 2d 0h (22 Oct)"]]);
+    expect(cache.getFiredExpiryWarningIds()).to.deep.equal(new Set([CREDIT_ID]));
+  });
+
+  it("does not notify a second time on the next evaluation", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(2), cache, runAiLimits: async () => raw, notify });
+    await loadUsageData({ now: () => daysBeforeExpiry(1), cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(cache.getFiredExpiryWarningIds()).to.deep.equal(new Set([CREDIT_ID]));
+  });
+
+  it("never notifies about a credit without expires_at", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry({ expires_at: null })] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(2), cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("does not notify about a credit that already expired", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(-1), cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("removes the persisted id once the credit disappears from a known list", async () => {
+    const cache = createFakeCache({ firedExpiryWarningIds: new Set([CREDIT_ID]) });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(1), cache, runAiLimits: async () => raw, notify });
+
+    expect(cache.getFiredExpiryWarningIds()).to.deep.equal(new Set());
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("removes the persisted id once the credit is no longer available", async () => {
+    const cache = createFakeCache({ firedExpiryWarningIds: new Set([CREDIT_ID]) });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry({ status: "redeemed" })] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(1), cache, runAiLimits: async () => raw, notify });
+
+    expect(cache.getFiredExpiryWarningIds()).to.deep.equal(new Set());
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("keeps the persisted id when the source cannot list credits (null), so it does not re-fire later", async () => {
+    const cache = createFakeCache({ firedExpiryWarningIds: new Set([CREDIT_ID]) });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+
+    await loadUsageData({
+      now: () => daysBeforeExpiry(1.5),
+      cache,
+      runAiLimits: async () => rawReport({ reset_credit_entries: null }),
+      notify,
+    });
+    await loadUsageData({
+      now: () => daysBeforeExpiry(1),
+      cache,
+      runAiLimits: async () => rawReport({ reset_credit_entries: [rawResetCreditEntry()] }),
+      notify,
+    });
+
+    expect(cache.getFiredExpiryWarningIds()).to.deep.equal(new Set([CREDIT_ID]));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores a non-Codex credit entry", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry({ provider: "anthropic", account: "work" })] });
+
+    await loadUsageData({ now: () => daysBeforeExpiry(2), cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("persists the id before awaiting notify, so an overlapping second load does not warn again", async () => {
+    const cache = createFakeCache();
+    let releaseNotify: (() => void) | undefined;
+    const notifyGate = new Promise<void>((resolve) => {
+      releaseNotify = resolve;
+    });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {
+      await notifyGate;
+    });
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+    const deps = { now: () => daysBeforeExpiry(2), cache, runAiLimits: async () => raw, notify };
+
+    const loads = Promise.all([loadUsageData(deps), loadUsageData(deps)]);
+    releaseNotify?.();
+    await loads;
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rejected expiry notification does not reject loadUsageData and the id stays persisted", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {
+      throw new Error("osascript failed");
+    });
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+
+    const result = await loadUsageData({ now: () => daysBeforeExpiry(2), cache, runAiLimits: async () => raw, notify });
+
+    expect(result.runError).to.equal(null);
+    expect(cache.getFiredExpiryWarningIds()).to.deep.equal(new Set([CREDIT_ID]));
+  });
+
+  it("on a runner failure neither warns nor touches the persisted ids", async () => {
+    const cache = createFakeCache({ firedExpiryWarningIds: new Set([CREDIT_ID]) });
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+
+    await loadUsageData({
+      now: () => daysBeforeExpiry(2),
+      cache,
+      runAiLimits: async () => {
+        throw new Error("ai-limits exited with code 1");
+      },
+      notify,
+    });
+
+    expect(cache.setFiredExpiryWarningIds).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the credit expires while the runner is still fetching", async () => {
+    const cache = createFakeCache();
+    const notify = vi.fn<(title: string, message: string) => Promise<void>>(async () => {});
+    const raw = rawReport({ reset_credit_entries: [rawResetCreditEntry()] });
+    let callCount = 0;
+    const now = (): Date => {
+      callCount += 1;
+      // First read (pre-fetch) is well inside the warning window; every read after the runner
+      // await must reflect that the credit has since expired.
+      return callCount === 1 ? daysBeforeExpiry(2) : daysBeforeExpiry(-1);
+    };
+
+    await loadUsageData({ now, cache, runAiLimits: async () => raw, notify });
+
+    expect(notify).not.toHaveBeenCalled();
   });
 });

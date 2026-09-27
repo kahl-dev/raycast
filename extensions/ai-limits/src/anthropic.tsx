@@ -16,8 +16,9 @@ import { loadDependencies } from "./load-dependencies";
 // without a version in args, a snapshot written by an older build is restored into code that
 // expects the new shape. That is not a glitch: the stale snapshot renders, the render throws, and
 // the command dies before the fresh fetch can overwrite the cache, so every subsequent tick repeats
-// it. Bumped to 3 with the `ai-limits --json` report/UsageSnapshot rewrite (multi-account).
-const SNAPSHOT_VERSION = 3;
+// it. Bumped to 3 with the `ai-limits --json` report/UsageSnapshot rewrite (multi-account), to 4
+// when the report gained resetCreditEntries.
+const SNAPSHOT_VERSION = 4;
 
 const TITLE_PLACEHOLDER = "AI Limits";
 

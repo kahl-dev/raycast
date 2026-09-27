@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDurationShort, formatReset, formatTimeShort } from "./format";
+import { formatDayMonth, formatDurationShort, formatReset, formatTimeShort } from "./format";
 
 describe("formatTimeShort", () => {
   it("zero-pads single-digit hours and minutes", () => {
@@ -65,5 +65,20 @@ describe("formatReset", () => {
     const resetsAt = new Date(2026, 6, 21, 7, 0);
 
     expect(formatReset(resetsAt, now)).to.equal("07:00");
+  });
+});
+
+describe("formatDayMonth", () => {
+  it("renders the local day without padding and the short English month", () => {
+    expect(formatDayMonth(new Date(2026, 9, 22, 22, 31))).to.equal("22 Oct");
+  });
+
+  it("does not zero-pad a single-digit day", () => {
+    expect(formatDayMonth(new Date(2026, 10, 3, 0, 0))).to.equal("3 Nov");
+  });
+
+  it("uses the local calendar day, not the UTC one, just after local midnight", () => {
+    expect(formatDayMonth(new Date(2026, 0, 1, 0, 5))).to.equal("1 Jan");
+    expect(formatDayMonth(new Date(2026, 11, 31, 23, 55))).to.equal("31 Dec");
   });
 });

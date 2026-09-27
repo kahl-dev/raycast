@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { aiLimitsReport, reportAccount, reportBucket } from "./__fixtures__/report";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { aiLimitsReport, reportAccount, reportBucket, resetCreditEntry } from "./__fixtures__/report";
 import { buildDropdownModel, DropdownAccountSection, shouldShowRedeemHint } from "./dropdown-model";
 import { formatReset, formatTimeShort } from "./format";
 
@@ -212,12 +212,22 @@ describe("buildDropdownModel — account sections", () => {
   });
 });
 
+// The expiry instants are real UTC timestamps; their local calendar day ("22 Oct") holds in the
+// user's zone but not east of UTC+3:28, so the zone is pinned for the date-formatting assertions.
+// Node re-reads TZ whenever process.env.TZ is assigned.
+beforeAll(() => {
+  vi.stubEnv("TZ", "Europe/Berlin");
+});
+
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("buildDropdownModel — codex section", () => {
   it("shows 'Reset credits: 0 available' for reset_credits 0, with no redeem subtitle", () => {
     const report = aiLimitsReport({ accounts: [], buckets: [], plans: [], resetCredits: 0 });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: 0 available");
-    expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([{ title: "Reset credits: 0 available", subtitle: null }]);
   });
 
   it("shows 'Reset credits: 3 available' with the redeem subtitle when the primary bucket is at/over 100%", () => {
@@ -228,8 +238,9 @@ describe("buildDropdownModel — codex section", () => {
       resetCredits: 3,
     });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: 3 available");
-    expect(model.codexSection.resetCreditsSubtitle).to.equal("Redeem: codex → /usage");
+    expect(model.codexSection.resetCreditRows).to.deep.equal([
+      { title: "Reset credits: 3 available", subtitle: "Redeem: codex → /usage" },
+    ]);
   });
 
   it("shows 'Reset credits: 3 available' without the redeem subtitle when the primary bucket is below 100%", () => {
@@ -240,8 +251,7 @@ describe("buildDropdownModel — codex section", () => {
       resetCredits: 3,
     });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: 3 available");
-    expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([{ title: "Reset credits: 3 available", subtitle: null }]);
   });
 
   it("shows 'Reset credits: unknown' for a null reset_credits", () => {
@@ -252,8 +262,98 @@ describe("buildDropdownModel — codex section", () => {
       resetCredits: null,
     });
     const model = buildDropdownModel(report);
-    expect(model.codexSection.resetCreditsLabel).to.equal("Reset credits: unknown");
-    expect(model.codexSection.resetCreditsSubtitle).to.equal(null);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([{ title: "Reset credits: unknown", subtitle: null }]);
+  });
+
+  it("shows one row per reset credit with its local expiry date for the real Codex example", () => {
+    const report = aiLimitsReport({
+      accounts: [],
+      buckets: [],
+      plans: [],
+      resetCredits: 1,
+      resetCreditEntries: [resetCreditEntry()],
+    });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([
+      { title: "Reset credits: Full reset expires 22 Oct", subtitle: null },
+    ]);
+  });
+
+  it("shows several credits as several rows in report order, 'reset' for a missing title, 'no expiry' for a missing expires_at", () => {
+    const report = aiLimitsReport({
+      accounts: [],
+      buckets: [],
+      plans: [],
+      resetCredits: 3,
+      resetCreditEntries: [
+        resetCreditEntry({ id: "a", expiresAt: new Date("2026-10-22T20:31:07.000Z") }),
+        resetCreditEntry({ id: "b", title: null, expiresAt: new Date("2026-11-03T12:00:00.000Z") }),
+        resetCreditEntry({ id: "c", title: "Weekly reset", expiresAt: null }),
+      ],
+    });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([
+      { title: "Reset credits: Full reset expires 22 Oct", subtitle: null },
+      { title: "Reset credits: reset expires 3 Nov", subtitle: null },
+      { title: "Reset credits: Weekly reset, no expiry", subtitle: null },
+    ]);
+  });
+
+  it("puts the redeem hint on the first credit row only when the primary bucket is maxed out", () => {
+    const report = aiLimitsReport({
+      accounts: [],
+      buckets: [codexBucket("codex.primary", { percent: 100, elapsedPercent: 70 })],
+      plans: [],
+      resetCredits: 2,
+      resetCreditEntries: [resetCreditEntry({ id: "a" }), resetCreditEntry({ id: "b" })],
+    });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([
+      { title: "Reset credits: Full reset expires 22 Oct", subtitle: "Redeem: codex → /usage" },
+      { title: "Reset credits: Full reset expires 22 Oct", subtitle: null },
+    ]);
+  });
+
+  it("names the status of a listed credit that is no longer available", () => {
+    const report = aiLimitsReport({
+      accounts: [],
+      buckets: [],
+      plans: [],
+      resetCredits: 0,
+      resetCreditEntries: [
+        resetCreditEntry({ status: "redeemed" }),
+        resetCreditEntry({ status: "expired", expiresAt: null }),
+      ],
+    });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([
+      { title: "Reset credits: Full reset expires 22 Oct (redeemed)", subtitle: null },
+      { title: "Reset credits: Full reset, no expiry (expired)", subtitle: null },
+    ]);
+  });
+
+  it("keeps the count row when reset_credit_entries is null", () => {
+    const report = aiLimitsReport({ accounts: [], buckets: [], plans: [], resetCredits: 1, resetCreditEntries: null });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([{ title: "Reset credits: 1 available", subtitle: null }]);
+  });
+
+  it("keeps the count row when reset_credit_entries is a known-empty list", () => {
+    const report = aiLimitsReport({ accounts: [], buckets: [], plans: [], resetCredits: 0, resetCreditEntries: [] });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([{ title: "Reset credits: 0 available", subtitle: null }]);
+  });
+
+  it("ignores non-Codex reset credit entries in the Codex section", () => {
+    const report = aiLimitsReport({
+      accounts: [],
+      buckets: [],
+      plans: [],
+      resetCredits: 0,
+      resetCreditEntries: [resetCreditEntry({ provider: "anthropic", account: "work" })],
+    });
+    const model = buildDropdownModel(report);
+    expect(model.codexSection.resetCreditRows).to.deep.equal([{ title: "Reset credits: 0 available", subtitle: null }]);
   });
 
   it("codex rows compose title from label/percent and Updated from the codex bucket's observedAt", () => {

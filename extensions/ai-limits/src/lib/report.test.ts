@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import rawFixture from "./__fixtures__/ai-limits-report.json";
-import { parseAiLimitsReport } from "./report";
+import { parseAiLimitsReport, serializeAiLimitsReport } from "./report";
 
 function clone(): typeof rawFixture {
   return JSON.parse(JSON.stringify(rawFixture)) as typeof rawFixture;
@@ -148,6 +148,18 @@ describe("parseAiLimitsReport", () => {
       errors: [],
       skipped: [],
       resetCredits: 0,
+      resetCreditEntries: [
+        {
+          provider: "codex",
+          account: "default",
+          id: "RateLimitResetCredit_6ebf262083f08191adacb227e3b1b96b",
+          resetType: "codexRateLimits",
+          status: "available",
+          title: "Full reset",
+          grantedAt: new Date("2026-09-22T20:31:07.000Z"),
+          expiresAt: new Date("2026-10-22T20:31:07.000Z"),
+        },
+      ],
       plans: [
         { provider: "anthropic", account: "work", plan: "max_20x", source: "credentials" },
         { provider: "anthropic", account: "private", plan: "max_5x", source: "credentials" },
@@ -419,6 +431,113 @@ describe("parseAiLimitsReport", () => {
     expect(() => parseAiLimitsReport(raw)).toThrow();
   });
 
+  it("rejects when reset_credit_entries is missing", () => {
+    const raw = clone();
+    delete asMutable(raw).reset_credit_entries;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries is missing");
+  });
+
+  it("accepts a null reset_credit_entries (source cannot list individual credits)", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries = null;
+    expect(parseAiLimitsReport(raw).resetCreditEntries).to.equal(null);
+  });
+
+  it("accepts an empty reset_credit_entries list (known empty)", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries = [];
+    expect(parseAiLimitsReport(raw).resetCreditEntries).to.deep.equal([]);
+  });
+
+  it("rejects when reset_credit_entries is neither a list nor null", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries = { id: "x" };
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries is not a list");
+  });
+
+  it("accepts a reset credit entry whose title and expires_at are null", () => {
+    const raw = clone();
+    const entry = asMutable(raw).reset_credit_entries[0];
+    entry.title = null;
+    entry.expires_at = null;
+    expect(parseAiLimitsReport(raw).resetCreditEntries).to.deep.equal([
+      {
+        provider: "codex",
+        account: "default",
+        id: "RateLimitResetCredit_6ebf262083f08191adacb227e3b1b96b",
+        resetType: "codexRateLimits",
+        status: "available",
+        title: null,
+        grantedAt: new Date("2026-09-22T20:31:07.000Z"),
+        expiresAt: null,
+      },
+    ]);
+  });
+
+  it("rejects a reset credit entry whose expires_at is not a date string", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].expires_at = 1792701067;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].expires_at is not a string");
+  });
+
+  it("rejects a reset credit entry whose expires_at is an unparseable string", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].expires_at = "next month";
+    expect(() => parseAiLimitsReport(raw)).toThrow(
+      "ai-limits: reset_credit_entries[0].expires_at is not a valid ISO 8601 date: next month",
+    );
+  });
+
+  it("rejects a reset credit entry whose granted_at is null", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].granted_at = null;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].granted_at is not a string");
+  });
+
+  it("rejects a reset credit entry without an id", () => {
+    const raw = clone();
+    delete asMutable(raw).reset_credit_entries[0].id;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].id is not a string");
+  });
+
+  it("rejects a reset credit entry whose status has the wrong type", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].status = true;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].status is not a string");
+  });
+
+  it("rejects a reset credit entry whose reset_type is missing", () => {
+    const raw = clone();
+    delete asMutable(raw).reset_credit_entries[0].reset_type;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].reset_type is not a string");
+  });
+
+  it("rejects a reset credit entry whose title is a number", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].title = 1;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].title is not a string");
+  });
+
+  it("rejects a reset credit entry with an unknown provider", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].provider = "gemini";
+    expect(() => parseAiLimitsReport(raw)).toThrow(
+      'ai-limits: reset_credit_entries[0].provider is not a known provider (anthropic|codex): "gemini"',
+    );
+  });
+
+  it("rejects a reset credit entry without an account", () => {
+    const raw = clone();
+    delete asMutable(raw).reset_credit_entries[0].account;
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0].account is not a string");
+  });
+
+  it("rejects a reset credit entry that is not an object", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries = ["RateLimitResetCredit_x"];
+    expect(() => parseAiLimitsReport(raw)).toThrow("ai-limits: reset_credit_entries[0] is not an object");
+  });
+
   it("rejects when plans is missing", () => {
     const raw = clone();
     delete asMutable(raw).plans;
@@ -473,5 +592,29 @@ describe("parseAiLimitsReport", () => {
     const raw = clone();
     delete asMutable(raw).sources[0].source;
     expect(() => parseAiLimitsReport(raw)).toThrow();
+  });
+});
+
+// cache.ts stores the last good report through serializeAiLimitsReport and reads it back through
+// parseAiLimitsReport — a field the serializer drops makes every cached report unreadable.
+describe("serializeAiLimitsReport", () => {
+  it("round-trips a parsed report, reset credit entries included", () => {
+    const parsed = parseAiLimitsReport(clone());
+    expect(parseAiLimitsReport(serializeAiLimitsReport(parsed))).to.deep.equal(parsed);
+  });
+
+  it("round-trips a report whose reset credit entries are null", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries = null;
+    const parsed = parseAiLimitsReport(raw);
+    expect(parseAiLimitsReport(serializeAiLimitsReport(parsed))).to.deep.equal(parsed);
+  });
+
+  it("round-trips a reset credit entry without title and expiry", () => {
+    const raw = clone();
+    asMutable(raw).reset_credit_entries[0].title = null;
+    asMutable(raw).reset_credit_entries[0].expires_at = null;
+    const parsed = parseAiLimitsReport(raw);
+    expect(parseAiLimitsReport(serializeAiLimitsReport(parsed))).to.deep.equal(parsed);
   });
 });

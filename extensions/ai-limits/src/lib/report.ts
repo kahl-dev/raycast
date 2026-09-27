@@ -49,6 +49,17 @@ export interface ReportSource {
   source: string;
 }
 
+export interface ReportResetCreditEntry {
+  provider: ReportProvider;
+  account: string;
+  id: string;
+  resetType: string;
+  status: string;
+  title: string | null;
+  grantedAt: Date;
+  expiresAt: Date | null;
+}
+
 export interface AiLimitsReport {
   fetchedAt: Date;
   stale: boolean;
@@ -57,6 +68,8 @@ export interface AiLimitsReport {
   errors: ReportError[];
   skipped: ReportSkipped[];
   resetCredits: number | null;
+  // null: the source cannot list individual credits (unknown); []: known to hold none.
+  resetCreditEntries: ReportResetCreditEntry[] | null;
   plans: ReportPlan[];
   sources: ReportSource[];
 }
@@ -103,6 +116,13 @@ function requireStringOrNull(value: unknown, context: string): string | null {
     return null;
   }
   return requireString(value, context);
+}
+
+function requireDateOrNull(value: unknown, context: string): Date | null {
+  if (value === null) {
+    return null;
+  }
+  return requireDate(value, context);
 }
 
 function requireNumberOrNull(value: unknown, context: string): number | null {
@@ -205,6 +225,33 @@ function parseSource(raw: unknown, index: number): ReportSource {
   };
 }
 
+function parseResetCreditEntry(raw: unknown, index: number): ReportResetCreditEntry {
+  const context = `reset_credit_entries[${index}]`;
+  const object = assertObject(raw, context);
+  return {
+    provider: parseProvider(object.provider, `${context}.provider`),
+    account: requireString(object.account, `${context}.account`),
+    id: requireString(object.id, `${context}.id`),
+    resetType: requireString(object.reset_type, `${context}.reset_type`),
+    status: requireString(object.status, `${context}.status`),
+    title: requireStringOrNull(object.title, `${context}.title`),
+    grantedAt: requireDate(object.granted_at, `${context}.granted_at`),
+    expiresAt: requireDateOrNull(object.expires_at, `${context}.expires_at`),
+  };
+}
+
+function parseResetCreditEntries(object: Record<string, unknown>): ReportResetCreditEntry[] | null {
+  if (!("reset_credit_entries" in object)) {
+    throw new Error("ai-limits: reset_credit_entries is missing");
+  }
+  if (object.reset_credit_entries === null) {
+    return null;
+  }
+  return requireArray(object.reset_credit_entries, "reset_credit_entries").map((entry, index) =>
+    parseResetCreditEntry(entry, index),
+  );
+}
+
 export function parseAiLimitsReport(raw: unknown): AiLimitsReport {
   const object = assertObject(raw, "ai-limits-Report");
 
@@ -218,8 +265,49 @@ export function parseAiLimitsReport(raw: unknown): AiLimitsReport {
     throw new Error("ai-limits: reset_credits is missing");
   }
   const resetCredits = requireNumberOrNull(object.reset_credits, "reset_credits");
+  const resetCreditEntries = parseResetCreditEntries(object);
   const plans = requireArray(object.plans, "plans").map((entry, index) => parsePlan(entry, index));
   const sources = requireArray(object.sources, "sources").map((entry, index) => parseSource(entry, index));
 
-  return { fetchedAt, stale, accounts, buckets, errors, skipped, resetCredits, plans, sources };
+  return { fetchedAt, stale, accounts, buckets, errors, skipped, resetCredits, resetCreditEntries, plans, sources };
+}
+
+// Inverse of parseAiLimitsReport: back to the snake_case/ISO shape ai-limits prints. cache.ts
+// stores the last good report in this shape and reads it back through parseAiLimitsReport, so a
+// cached report is validated exactly like a fresh one.
+export function serializeAiLimitsReport(report: AiLimitsReport): unknown {
+  return {
+    fetched_at: report.fetchedAt.toISOString(),
+    stale: report.stale,
+    accounts: report.accounts,
+    buckets: report.buckets.map((bucket) => ({
+      id: bucket.id,
+      provider: bucket.provider,
+      account: bucket.account,
+      label: bucket.label,
+      percent: bucket.percent,
+      resets_at: bucket.resetsAt.toISOString(),
+      window_seconds: bucket.windowSeconds,
+      observed_at: bucket.observedAt.toISOString(),
+      elapsed_percent: bucket.elapsedPercent,
+    })),
+    errors: report.errors,
+    skipped: report.skipped,
+    reset_credits: report.resetCredits,
+    reset_credit_entries:
+      report.resetCreditEntries === null
+        ? null
+        : report.resetCreditEntries.map((entry) => ({
+            provider: entry.provider,
+            account: entry.account,
+            id: entry.id,
+            reset_type: entry.resetType,
+            status: entry.status,
+            title: entry.title,
+            granted_at: entry.grantedAt.toISOString(),
+            expires_at: entry.expiresAt === null ? null : entry.expiresAt.toISOString(),
+          })),
+    plans: report.plans,
+    sources: report.sources,
+  };
 }

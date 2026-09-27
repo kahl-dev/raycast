@@ -121,6 +121,18 @@
   "errors": [],
   "skipped": [],
   "reset_credits": 0,
+  "reset_credit_entries": [
+    {
+      "provider": "codex",
+      "account": "default",
+      "id": "RateLimitResetCredit_6ebf262083f08191adacb227e3b1b96b",
+      "reset_type": "codexRateLimits",
+      "status": "available",
+      "title": "Full reset",
+      "granted_at": "2026-09-22T20:31:07Z",
+      "expires_at": "2026-10-22T20:31:07Z"
+    }
+  ],
   "plans": [
     { "provider": "anthropic", "account": "work", "plan": "max_20x", "source": "credentials" },
     { "provider": "anthropic", "account": "private", "plan": "max_5x", "source": "credentials" },

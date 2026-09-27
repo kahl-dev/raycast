@@ -1,5 +1,5 @@
-import { formatReset, formatTimeShort } from "./format";
-import { AiLimitsReport, ReportBucket } from "./report";
+import { formatDayMonth, formatReset, formatTimeShort } from "./format";
+import { AiLimitsReport, ReportBucket, ReportResetCreditEntry } from "./report";
 import { CRITICAL_THRESHOLD, paceSeverity, Severity } from "./types";
 
 export interface DropdownBucketRow {
@@ -19,6 +19,11 @@ export interface DropdownSkippedRow {
   reason: string;
 }
 
+export interface DropdownResetCreditRow {
+  title: string;
+  subtitle: string | null;
+}
+
 export interface DropdownAccountSection {
   title: string;
   rows: DropdownBucketRow[];
@@ -32,8 +37,7 @@ export interface DropdownCodexSection {
   errorRows: DropdownErrorRow[];
   skippedRows: DropdownSkippedRow[];
   standLabel: string | null;
-  resetCreditsLabel: string;
-  resetCreditsSubtitle: string | null;
+  resetCreditRows: DropdownResetCreditRow[];
 }
 
 export interface DropdownModel {
@@ -78,6 +82,14 @@ function buildStandLabel(buckets: ReportBucket[], hasErrors: boolean): string | 
   return hasErrors ? `${base} (stale)` : base;
 }
 
+function resetCreditEntryTitle(entry: ReportResetCreditEntry): string {
+  const name = entry.title === null ? "reset" : entry.title;
+  const expiry = entry.expiresAt === null ? ", no expiry" : ` expires ${formatDayMonth(entry.expiresAt)}`;
+  // A redeemed or expired credit still listed must not read like one that can be used.
+  const status = entry.status === "available" ? "" : ` (${entry.status})`;
+  return `Reset credits: ${name}${expiry}${status}`;
+}
+
 export function shouldShowRedeemHint(primaryCodexPercent: number | null): boolean {
   return primaryCodexPercent !== null && primaryCodexPercent >= 100;
 }
@@ -114,8 +126,14 @@ export function buildDropdownModel(report: AiLimitsReport, now: Date = new Date(
     .filter((skipped) => skipped.provider === "codex")
     .map((skipped) => ({ reason: skipped.reason }));
   const primaryCodexBucket = codexBuckets.find((bucket) => bucket.id === "codex.primary") ?? null;
-  const resetCreditsLabel =
+  const resetCreditsCountLabel =
     report.resetCredits === null ? "Reset credits: unknown" : `Reset credits: ${report.resetCredits} available`;
+  const codexCreditEntries =
+    report.resetCreditEntries === null ? [] : report.resetCreditEntries.filter((entry) => entry.provider === "codex");
+  // One row per listed credit; the count row stays when the source cannot list credits (null) or
+  // lists none.
+  const resetCreditTitles =
+    codexCreditEntries.length === 0 ? [resetCreditsCountLabel] : codexCreditEntries.map(resetCreditEntryTitle);
   // "N > 0" gates the redeem hint independently of the pace-based shouldShowRedeemHint check: a
   // maxed-out primary bucket with zero reset credits has nothing to redeem.
   const hasRedeemableCredits = report.resetCredits !== null && report.resetCredits > 0;
@@ -129,8 +147,11 @@ export function buildDropdownModel(report: AiLimitsReport, now: Date = new Date(
     errorRows: codexErrorRows,
     skippedRows: codexSkippedRows,
     standLabel: buildStandLabel(codexBuckets, codexErrorRows.length > 0),
-    resetCreditsLabel,
-    resetCreditsSubtitle,
+    // The redeem hint concerns all credits alike, so it sits once, on the first row.
+    resetCreditRows: resetCreditTitles.map((title, index) => ({
+      title,
+      subtitle: index === 0 ? resetCreditsSubtitle : null,
+    })),
   };
 
   return { accountSections, codexSection };

@@ -1,6 +1,6 @@
 import { Cache } from "@raycast/api";
 import { HistoryPoint, parseHistoryJson, serializeHistoryJson } from "./projection";
-import { AiLimitsReport, parseAiLimitsReport } from "./report";
+import { AiLimitsReport, parseAiLimitsReport, serializeAiLimitsReport } from "./report";
 
 // Einziges lib-File mit @raycast/api-Import — Glue zwischen den reinen lib/*.ts-Funktionen und
 // Raycasts Cache-Speicher.
@@ -8,36 +8,9 @@ const cache = new Cache();
 
 const LAST_GOOD_REPORT_KEY = "lastGoodReport";
 const FIRED_ALERT_KEYS_KEY = "firedAlertKeys";
+const FIRED_EXPIRY_WARNING_IDS_KEY = "firedExpiryWarningIds";
 const LAST_OBSERVED_AT_PREFIX = "lastObservedAt:";
 const BUCKET_HISTORY_PREFIX = "bucketHistory:";
-
-// Inverse of parseAiLimitsReport's snake_case/ISO shape — the cached report is stored as the raw
-// ai-limits JSON text (not the camelCased AiLimitsReport), and read back through
-// parseAiLimitsReport itself so a cached report is validated exactly like a fresh one, and a
-// malformed or outdated cache entry fails the same way a malformed live response would.
-function toRawJson(report: AiLimitsReport): unknown {
-  return {
-    fetched_at: report.fetchedAt.toISOString(),
-    stale: report.stale,
-    accounts: report.accounts,
-    buckets: report.buckets.map((bucket) => ({
-      id: bucket.id,
-      provider: bucket.provider,
-      account: bucket.account,
-      label: bucket.label,
-      percent: bucket.percent,
-      resets_at: bucket.resetsAt.toISOString(),
-      window_seconds: bucket.windowSeconds,
-      observed_at: bucket.observedAt.toISOString(),
-      elapsed_percent: bucket.elapsedPercent,
-    })),
-    errors: report.errors,
-    skipped: report.skipped,
-    reset_credits: report.resetCredits,
-    plans: report.plans,
-    sources: report.sources,
-  };
-}
 
 export function getLastGoodReport(): AiLimitsReport | null {
   const stored = cache.get(LAST_GOOD_REPORT_KEY);
@@ -53,7 +26,7 @@ export function getLastGoodReport(): AiLimitsReport | null {
 }
 
 export function setLastGoodReport(report: AiLimitsReport): void {
-  cache.set(LAST_GOOD_REPORT_KEY, JSON.stringify(toRawJson(report)));
+  cache.set(LAST_GOOD_REPORT_KEY, JSON.stringify(serializeAiLimitsReport(report)));
 }
 
 function lastObservedAtKey(bucketKey: string): string {
@@ -90,14 +63,30 @@ export function setBucketHistory(bucketKey: string, history: HistoryPoint[]): vo
   cache.set(bucketHistoryKey(bucketKey), serializeHistoryJson(history));
 }
 
-export function getFiredAlertKeys(): Set<string> {
-  const stored = cache.get(FIRED_ALERT_KEYS_KEY);
+function getStringSet(cacheKey: string): Set<string> {
+  const stored = cache.get(cacheKey);
   if (stored === undefined) {
     return new Set();
   }
   return new Set(JSON.parse(stored) as string[]);
 }
 
+function setStringSet(cacheKey: string, values: Set<string>): void {
+  cache.set(cacheKey, JSON.stringify([...values]));
+}
+
+export function getFiredAlertKeys(): Set<string> {
+  return getStringSet(FIRED_ALERT_KEYS_KEY);
+}
+
 export function setFiredAlertKeys(keys: Set<string>): void {
-  cache.set(FIRED_ALERT_KEYS_KEY, JSON.stringify([...keys]));
+  setStringSet(FIRED_ALERT_KEYS_KEY, keys);
+}
+
+export function getFiredExpiryWarningIds(): Set<string> {
+  return getStringSet(FIRED_EXPIRY_WARNING_IDS_KEY);
+}
+
+export function setFiredExpiryWarningIds(ids: Set<string>): void {
+  setStringSet(FIRED_EXPIRY_WARNING_IDS_KEY, ids);
 }

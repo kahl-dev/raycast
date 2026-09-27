@@ -1,6 +1,7 @@
 import { secondsUntil } from "./types";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
@@ -10,6 +11,11 @@ export function formatTimeShort(date: Date): string {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+// Local calendar day, e.g. "22 Oct".
+export function formatDayMonth(date: Date): string {
+  return `${date.getDate()} ${MONTH_LABELS[date.getMonth()]}`;
 }
 
 // Coarse "biggest unit first" duration, matching the tmux statusline countdown style: days+hours

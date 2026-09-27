@@ -14,6 +14,8 @@ export const loadDependencies: LoadDependencies = {
     setLastObservedAt: cache.setLastObservedAt,
     getFiredAlertKeys: cache.getFiredAlertKeys,
     setFiredAlertKeys: cache.setFiredAlertKeys,
+    getFiredExpiryWarningIds: cache.getFiredExpiryWarningIds,
+    setFiredExpiryWarningIds: cache.setFiredExpiryWarningIds,
     getBucketHistory: cache.getBucketHistory,
     setBucketHistory: cache.setBucketHistory,
   },

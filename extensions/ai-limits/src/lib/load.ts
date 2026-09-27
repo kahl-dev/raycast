@@ -1,5 +1,11 @@
 import { appendHistory, HistoryPoint } from "./projection";
-import { AiLimitsReport, parseAiLimitsReport, ReportBucket } from "./report";
+import { AiLimitsReport, parseAiLimitsReport, ReportBucket, ReportResetCreditEntry } from "./report";
+import {
+  determineExpiryWarnings,
+  ExpiryWarning,
+  formatExpiryWarningMessage,
+  pruneExpiryWarningIds,
+} from "./reset-credit-expiry";
 import {
   AlertBucket,
   determineAlertsToFire,
@@ -22,6 +28,8 @@ export interface LoadCacheDependencies {
   setLastObservedAt: (bucketKey: string, date: Date) => void;
   getFiredAlertKeys: () => Set<string>;
   setFiredAlertKeys: (keys: Set<string>) => void;
+  getFiredExpiryWarningIds: () => Set<string>;
+  setFiredExpiryWarningIds: (ids: Set<string>) => void;
   getBucketHistory: (bucketKey: string) => HistoryPoint[];
   setBucketHistory: (bucketKey: string, history: HistoryPoint[]) => void;
 }
@@ -87,6 +95,27 @@ function recordHistoryIfAdvanced(cache: LoadCacheDependencies, buckets: ReportBu
   }
 }
 
+// Only Codex credits warn today: the notification text names Codex, and Anthropic credits have no
+// display yet. A null list is unknown, so the persisted ids stay untouched (see
+// pruneExpiryWarningIds). Persisted before the caller awaits notify, like the alert keys.
+function takeExpiryWarnings(
+  cache: LoadCacheDependencies,
+  entries: ReportResetCreditEntry[] | null,
+  now: Date,
+): ExpiryWarning[] {
+  if (entries === null) {
+    return [];
+  }
+  const codexEntries = entries.filter((entry) => entry.provider === "codex");
+  const firedBefore = cache.getFiredExpiryWarningIds();
+  const pruned = pruneExpiryWarningIds(firedBefore, codexEntries);
+  const warnings = determineExpiryWarnings(codexEntries, pruned, now);
+  if (warnings.length > 0 || pruned.size !== firedBefore.size) {
+    cache.setFiredExpiryWarningIds(new Set([...pruned, ...warnings.map((warning) => warning.id)]));
+  }
+  return warnings;
+}
+
 export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapshot> {
   const now = deps.now();
 
@@ -136,6 +165,11 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   if (alertsToFire.length > 0 || prunedFired.size !== firedBefore.size) {
     deps.cache.setFiredAlertKeys(markAlertsFired(prunedFired, alertsToFire));
   }
+  // Sampled again here (not the pre-fetch `now` above): runAiLimits can take up to 90s, and a
+  // credit that expires during that wait must not still read as "expires in ..." against a stale
+  // clock reading.
+  const expiryEvaluatedAt = deps.now();
+  const expiryWarnings = takeExpiryWarnings(deps.cache, effectiveReport.resetCreditEntries, expiryEvaluatedAt);
 
   // allSettled (not all): a failed osascript call must not throw out of loadUsageData — that would
   // discard the already-fetched, already-cached report for a display failure unrelated to whether
@@ -143,6 +177,9 @@ export async function loadUsageData(deps: LoadDependencies): Promise<UsageSnapsh
   const notificationResults = await Promise.allSettled([
     ...alertsToNotify.map((alert) => deps.notify("AI Limits", formatAlertMessage(alert.bucket, alert.threshold, now))),
     ...resetEventsToFire.map((event) => deps.notify("AI Limits", formatResetMessage(event.bucket))),
+    ...expiryWarnings.map((warning) =>
+      deps.notify("AI Limits", formatExpiryWarningMessage(warning, expiryEvaluatedAt)),
+    ),
   ]);
   for (const result of notificationResults) {
     if (result.status === "rejected") {
