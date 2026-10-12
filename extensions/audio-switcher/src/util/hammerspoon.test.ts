@@ -128,12 +128,12 @@ describe("toggleInputMute", () => {
     expect(await toggleInputMute()).to.equal(false);
   });
 
-  it("returns null when the Wave:3 device is not found", async () => {
+  it("returns null when there is no default input device", async () => {
     resolveWith("NODEV");
     expect(await toggleInputMute()).to.equal(null);
   });
 
-  it("returns null when the device has no controllable input volume", async () => {
+  it("returns null when the device has neither mute nor volume control", async () => {
     resolveWith("NOVOL");
     expect(await toggleInputMute()).to.equal(null);
   });

@@ -77,10 +77,11 @@ export async function resetInputToGuard(): Promise<void> {
 }
 
 /**
- * Toggle mute on the current default input device via the daemon's per-device volume control,
- * which mutes the mic actually capturing and preserves its gain across unmute. Returns the new
- * muted state, or null when Hammerspoon is unreachable, the Wave:3 device is not found, or it has
- * no controllable input volume — the caller then falls back to AppleScript on the current input.
+ * Toggle mute on the current default input device via the daemon (hardware mute, gain 0 only for
+ * devices without a mute control), which mutes the mic actually capturing and preserves its gain
+ * across unmute. Returns the new muted state, or null when Hammerspoon is unreachable, there is no
+ * default input, or it has neither mute nor volume control — the caller then falls back to
+ * AppleScript on the current input.
  */
 export async function toggleInputMute(): Promise<boolean | null> {
   const lua = REQUIRE_DAEMON + "if ok and m.toggleInputMute then return m.toggleInputMute() end; return 'NODEV'";

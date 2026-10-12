@@ -5,9 +5,10 @@ import { toggleInputMute } from "./util/hammerspoon";
 
 const execFileAsync = promisify(execFile);
 
-// Fallback when the Wave:3 mic can't be targeted directly (Hammerspoon unreachable, device not
-// found, or no per-device volume control): toggle the CURRENT default input's volume via
-// AppleScript. Returns the new muted state.
+// Fallback when the daemon can't mute (Hammerspoon unreachable, no default input, or neither mute
+// nor volume control): toggle the CURRENT default input's volume via AppleScript, which has no
+// mute control. On the Wave:3 this only drops to its lowest gain step, not silence — the daemon's
+// hardware mute is the real path. Returns the new muted state.
 async function toggleCurrentInputMute(): Promise<boolean> {
   const { stdout } = await execFileAsync("osascript", ["-e", "input volume of (get volume settings)"]);
   const currentlyMuted = stdout.trim() === "0";
