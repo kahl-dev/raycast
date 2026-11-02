@@ -11,7 +11,7 @@ export type ReportProvider = "anthropic" | "codex";
 export interface ReportBucket {
   // `${provider}:${account}:${id}` — the unique identity for a bucket across every account and
   // provider. Used as the History/Alert/Reset dedup key instead of the bare `id`, which repeats
-  // across accounts (every Anthropic account has an "anthropic.session" bucket).
+  // across accounts (every Anthropic account has an "anthropic.weekly_all" bucket).
   key: string;
   id: string;
   provider: ReportProvider;
